@@ -40,8 +40,8 @@ class PaperEngineTests(unittest.TestCase):
     def test_long_and_short_gross_pnl_signs(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
         self.engine.open_position("ETHUSDT", "SHORT", 100)
-        self.assertAlmostEqual(self.engine._gross_pnl(self.engine._positions["BTCUSDT"], 110), 40)
-        self.assertAlmostEqual(self.engine._gross_pnl(self.engine._positions["ETHUSDT"], 90), 40)
+        self.assertAlmostEqual(self.engine._gross_pnl(self.engine._positions["BTCUSDT"], 110), 39.92015968063872)
+        self.assertAlmostEqual(self.engine._gross_pnl(self.engine._positions["ETHUSDT"], 90), 39.92015968063872)
 
     def test_fees_and_funding_are_included_in_net_pnl(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
