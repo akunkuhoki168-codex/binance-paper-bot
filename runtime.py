@@ -111,9 +111,11 @@ class FuturesPaperRuntime:
                 price = float(row["markPrice"])
                 if price > 0:
                     updated[symbol] = price
+        # Return only marks from this response. Cached marks may be stale and
+        # must never be used to close or manage a position after a data outage.
         with self._lock:
             self._marks.update(updated)
-            return dict(self._marks)
+            return dict(updated)
 
     def _on_closed_candle(self, candle: FuturesCandle) -> None:
         if self.engine.get_bot_state() != "RUNNING":
@@ -189,10 +191,16 @@ class FuturesPaperRuntime:
             while not self._stop.is_set():
                 state = self.engine.get_bot_state()
                 if state == "STOPPING":
-                    if self._close_all_and_verify():
-                        self.engine.set_bot_state("IDLE")
-                        self._stop.set()
-                        break
+                    try:
+                        if self._close_all_and_verify():
+                            self.engine.set_bot_state("IDLE")
+                            self._stop.set()
+                            break
+                    except (requests.RequestException, ValueError, KeyError) as exc:
+                        # Do not exit while paper positions remain open just
+                        # because public mark-price data is temporarily unavailable.
+                        self.last_error = f"STOP close attempt failed: {exc}"
+                        print(self.last_error)
                 elif state in ("RUNNING", "PAUSED"):
                     try:
                         self._manage_positions()
