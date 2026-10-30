@@ -1,14 +1,14 @@
 """Heikin-Ashi colour-flip strategy for USDⓈ-M Futures paper trading.
 
-This module is deliberately independent of the trading engine. It computes signals
-and returns decisions; it never submits exchange orders, reads API credentials, or
-places trades. The caller must provide CLOSED candles and net PnL after fees and
-funding, and must execute/validate returned decisions in its paper engine.
+This module is independent of the trading engine. It emits decisions only: it
+never reads credentials or submits exchange orders. The caller supplies CLOSED
+candles and net PnL after fees and funding, then safely executes decisions.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from math import isfinite
 from typing import Iterable, Literal, Optional
 
 Side = Literal["LONG", "SHORT"]
@@ -28,8 +28,10 @@ class HAFlipsSettings:
     def __post_init__(self) -> None:
         if self.timeframe not in ("15m", "1h", "4h"):
             raise ValueError("timeframe must be one of: 15m, 1h, 4h")
-        if self.take_profit_usdt <= 0 or self.stop_loss_usdt <= 0:
-            raise ValueError("take_profit_usdt and stop_loss_usdt must be positive")
+        if not isfinite(self.take_profit_usdt) or self.take_profit_usdt <= 0:
+            raise ValueError("take_profit_usdt must be a finite positive number")
+        if not isfinite(self.stop_loss_usdt) or self.stop_loss_usdt <= 0:
+            raise ValueError("stop_loss_usdt must be a finite positive number")
         if self.cooldown_minutes < 0:
             raise ValueError("cooldown_minutes cannot be negative")
 
@@ -45,12 +47,15 @@ class Candle:
     close: float
 
     def __post_init__(self) -> None:
-        if min(self.open, self.high, self.low, self.close) <= 0:
-            raise ValueError("OHLC prices must be positive")
+        prices = (self.open, self.high, self.low, self.close)
+        if not all(isfinite(price) and price > 0 for price in prices):
+            raise ValueError("OHLC prices must be finite and positive")
         if self.high < max(self.open, self.close, self.low):
             raise ValueError("high is inconsistent with OHLC values")
         if self.low > min(self.open, self.close, self.high):
             raise ValueError("low is inconsistent with OHLC values")
+        if not isinstance(self.open_time, int) or self.open_time < 0:
+            raise ValueError("open_time must be a non-negative Unix-millisecond integer")
 
 
 @dataclass(frozen=True)
@@ -62,11 +67,18 @@ class Decision:
     cooldown_until: Optional[datetime] = None
 
 
+def _validated_candles(candles: Iterable[Candle]) -> list[Candle]:
+    source = list(candles)
+    if any(not isinstance(candle, Candle) for candle in source):
+        raise TypeError("candles must contain only Candle instances")
+    if any(a.open_time >= b.open_time for a, b in zip(source, source[1:])):
+        raise ValueError("candles must be in strictly increasing chronological order")
+    return source
+
+
 def heikin_ashi(candles: Iterable[Candle]) -> list[dict[str, float | int | str]]:
     """Convert chronological completed OHLC candles into Heikin-Ashi candles."""
-    source = list(candles)
-    if not source:
-        return []
+    source = _validated_candles(candles)
     result: list[dict[str, float | int | str]] = []
     previous_ha_open: Optional[float] = None
     previous_ha_close: Optional[float] = None
@@ -99,6 +111,7 @@ class HAFlipsStrategy:
         self.settings = settings
         self._cooldown_until: dict[str, datetime] = {}
         self._last_candle_time: dict[str, int] = {}
+        self._sl_triggered_side: dict[str, Side] = {}
 
     def cooldown_until(self, symbol: str) -> Optional[datetime]:
         return self._cooldown_until.get(symbol.upper())
@@ -110,17 +123,23 @@ class HAFlipsStrategy:
         net_pnl_usdt: float,
         now: Optional[datetime] = None,
     ) -> Decision:
-        """Evaluate TP/SL on every mark-price update, not just candle close.
+        """Evaluate net-PnL TP/SL on each mark-price update.
 
-        net_pnl_usdt must already include entry/exit fees and funding cash flows.
-        On SL, the returned opposite-side intent asks the engine to close and then
-        attempt a reversal using whatever margin it can safely allocate.
+        net_pnl_usdt must include entry/exit fees and funding cash flows. The
+        engine must make close/reversal execution atomic and re-check available
+        margin. One SL intent is emitted per continuous position side.
         """
         symbol = symbol.upper()
         if position_side is None:
+            self._sl_triggered_side.pop(symbol, None)
             return Decision("HOLD", symbol, "No open position")
+        if position_side not in ("LONG", "SHORT"):
+            raise ValueError("position_side must be LONG, SHORT, or None")
+        if not isfinite(net_pnl_usdt):
+            raise ValueError("net_pnl_usdt must be finite")
 
         if net_pnl_usdt >= self.settings.take_profit_usdt:
+            self._sl_triggered_side.pop(symbol, None)
             current = now or datetime.now(timezone.utc)
             if current.tzinfo is None:
                 current = current.replace(tzinfo=timezone.utc)
@@ -134,6 +153,9 @@ class HAFlipsStrategy:
             )
 
         if net_pnl_usdt <= -self.settings.stop_loss_usdt:
+            if self._sl_triggered_side.get(symbol) == position_side:
+                return Decision("HOLD", symbol, "Stop-loss reversal already requested for this position")
+            self._sl_triggered_side[symbol] = position_side
             opposite: Side = "SHORT" if position_side == "LONG" else "LONG"
             return Decision(
                 "CLOSE_AND_REVERSE", symbol,
@@ -142,6 +164,7 @@ class HAFlipsStrategy:
                 side=opposite,
             )
 
+        self._sl_triggered_side.pop(symbol, None)
         return Decision("HOLD", symbol, "Neither net-PnL TP nor SL has been reached")
 
     def on_closed_candles(
@@ -151,14 +174,28 @@ class HAFlipsStrategy:
         position_side: Optional[Side] = None,
         now: Optional[datetime] = None,
     ) -> Decision:
-        """Evaluate a new completed HA candle; never reacts to an unfinished candle.
+        """Evaluate completed candles; DOJI candles do not erase the last colour.
 
-        Opposite colour changes are ignored while a position is open. Entry signals
-        are accepted only while flat and outside that symbol's TP cooldown.
+        Every newly observed candle is consumed even while a position or cooldown
+        blocks entry, so stale signals cannot open a position later.
         """
         symbol = symbol.upper()
+        if position_side not in (None, "LONG", "SHORT"):
+            raise ValueError("position_side must be LONG, SHORT, or None")
+
+        ha = heikin_ashi(candles)
+        if not ha:
+            return Decision("HOLD", symbol, "No completed candles supplied")
+        candle_time = int(ha[-1]["open_time"])
+        previous_time = self._last_candle_time.get(symbol)
+        if previous_time is not None and candle_time <= previous_time:
+            return Decision("HOLD", symbol, "This candle is duplicate or older than the last evaluated candle")
+        self._last_candle_time[symbol] = candle_time
+
         if position_side is not None:
             return Decision("HOLD", symbol, "Position remains open; HA flips do not reverse it")
+        if len(ha) < 2:
+            return Decision("HOLD", symbol, "Need at least two completed candles")
 
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
@@ -169,17 +206,10 @@ class HAFlipsStrategy:
         if until and current >= until:
             self._cooldown_until.pop(symbol, None)
 
-        ha = heikin_ashi(candles)
-        if len(ha) < 2:
-            return Decision("HOLD", symbol, "Need at least two completed candles")
-        latest = ha[-1]
-        previous = ha[-2]
-        candle_time = int(latest["open_time"])
-        if self._last_candle_time.get(symbol) == candle_time:
-            return Decision("HOLD", symbol, "This completed candle was already evaluated")
-        self._last_candle_time[symbol] = candle_time
-
-        old_colour, new_colour = previous["colour"], latest["colour"]
+        colours = [candle["colour"] for candle in ha if candle["colour"] != "DOJI"]
+        if len(colours) < 2:
+            return Decision("HOLD", symbol, "Need two non-DOJI HA candles to identify a flip")
+        old_colour, new_colour = colours[-2], colours[-1]
         if old_colour == "RED" and new_colour == "GREEN":
             return Decision("OPEN_LONG", symbol, "Confirmed closed Heikin-Ashi flip RED to GREEN", "LONG")
         if old_colour == "GREEN" and new_colour == "RED":
