@@ -1,18 +1,17 @@
 """Binance USDⓈ-M Futures paper-trading bot entry point.
 
-Uses the SQLite-backed PaperEngine. All execution is simulated.
-Public market data only — no API keys or live orders.
+Uses public market data and local SQLite paper execution only.
+No Binance credentials or live order endpoints are used.
 """
 from __future__ import annotations
 
 import os
 import signal
-import time
-from pathlib import Path
 
 from dotenv import load_dotenv
 
 from paper_engine.engine import PaperEngine, PaperEngineSettings
+from runtime import FuturesPaperRuntime
 
 load_dotenv()
 
@@ -23,12 +22,21 @@ LEVERAGE = int(os.getenv("LEVERAGE", "10"))
 FEE = float(os.getenv("TAKER_FEE_RATE", "0.0005"))
 TP = float(os.getenv("TAKE_PROFIT_USDT", "10"))
 SL = float(os.getenv("STOP_LOSS_USDT", "5"))
+SYMBOLS = tuple(
+    symbol.strip().upper()
+    for symbol in os.getenv(
+        "FUTURES_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT"
+    ).split(",")
+    if symbol.strip()
+)
+INTERVAL = os.getenv("STRATEGY_INTERVAL", "15m")
 
 
 def main() -> None:
     print("BINANCE USDⓈ-M FUTURES PAPER BOT")
-    print("PAPER TRADING ONLY — no live orders, no API keys")
+    print("PAPER TRADING ONLY — public market data; no live orders or API keys")
     print(f"Database: {DB_PATH}")
+    print(f"Symbols: {', '.join(SYMBOLS)} | HA timeframe: {INTERVAL}")
 
     settings = PaperEngineSettings(
         initial_capital=STARTING,
@@ -39,37 +47,27 @@ def main() -> None:
         stop_loss_usdt=SL,
     )
     engine = PaperEngine(DB_PATH, settings)
-
-    stop = False
+    runtime = FuturesPaperRuntime(
+        engine=engine,
+        symbols=SYMBOLS,
+        interval=INTERVAL,
+        seed_limit=int(os.getenv("SEED_CANDLES", "120")),
+        mark_poll_seconds=float(os.getenv("MARK_POLL_SECONDS", "3")),
+    )
 
     def _handle_signal(*_):
-        nonlocal stop
-        stop = True
-        print("\nShutdown signal received.")
+        print("\nShutdown requested; asking runtime to close positions safely.")
+        engine.set_bot_state("STOPPING")
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    # Simple heartbeat loop. In a full deployment the market-data feed
-    # (market_data.websocket or REST mark prices) calls engine.evaluate_exit
-    # and strategy decisions call engine.open_position.
-    print("Engine ready. Positions restored from SQLite if present.")
-    print("Bot state is controlled via the dashboard (or bot_control table).")
-    print("Press Ctrl+C to stop this process.")
-
     try:
-        while not stop:
-            state = engine.get_bot_state()
-            if state == "STOPPING":
-                print("STOP requested — engine will idle after positions are closed by dashboard.")
-                engine.set_bot_state("IDLE")
-            # Real market-data loop would live here.
-            time.sleep(2)
-            snap = engine.snapshot()
-            print(f"[{state}] equity={snap['equity']:.2f} positions={snap['active_positions']}")
+        runtime.run()
     finally:
+        runtime.stop_feed()
         engine.close()
-        print("Paper bot process exited. Database preserved.")
+        print("Paper bot process exited. SQLite database preserved.")
 
 
 if __name__ == "__main__":
