@@ -59,7 +59,7 @@ class RuntimeControlTests(unittest.TestCase):
     def test_entry_uses_fresh_mark_not_candle_close(self):
         self.engine.set_bot_state("RUNNING")
         self.runtime._marks = {"BTCUSDT": 105.0}
-        self.runtime._marks_updated_at = time.monotonic()
+        self.runtime._mark_updated_at = {"BTCUSDT": time.monotonic()}
         decision = SimpleNamespace(action="OPEN_LONG", side="LONG")
         candle = SimpleNamespace(symbol="BTCUSDT", interval="15m", close=100)
         with patch.object(self.runtime.strategy, "on_closed_candles", return_value=decision):
