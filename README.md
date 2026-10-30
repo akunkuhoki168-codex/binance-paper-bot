@@ -1,33 +1,51 @@
 # Binance Futures Paper Trading Bot
 
-This development build consumes live public Binance USDⓈ-M Futures market data and simulates trades locally. It has no API keys, signed requests, or authenticated trading endpoints, so it cannot place live orders.
+SQLite-backed multi-position paper trader for Binance USDⓈ-M Futures.
+
+**PAPER TRADING ONLY.** No API keys, no signed requests, no live orders. Uses public market-data endpoints and WebSocket streams only.
 
 ## Architecture
-- REST snapshots: order book, mark/index price, funding rate, open interest and 24-hour ticker.
-- WebSocket: best bid/ask, aggregate trades, mark-price/funding updates and partial depth; reconnect loop included.
-- Python strategy: transparent EMA crossover baseline and spread guard.
-- Paper engine: simulated 10x leverage (configurable), assumed taker fees, funding cash flows and SQLite trade journal.
-- Streamlit dashboard and Docker Compose deployment foundation.
 
-## Development-stage limitations
-Not production-ready for unattended trading. EMA is an illustrative baseline, not a recommendation. Fills use best bid/ask and a configured fee assumption; they do not reproduce queue priority, exact partial fills, latency, exchange liquidation mechanics or all margin rules. Funding is applied when the running process observes that the next funding timestamp has passed. Open paper positions are held in memory and are not restored after restart. Daily loss circuit breaker is not implemented. Dashboard updates on browser refresh. Treat simulated performance as approximate.
+- `paper_engine/engine.py` — persistent multi-position (LONG/SHORT) isolated-margin engine with TP/SL, SL-reversal, cooldowns, and bot lifecycle state.
+- `market_data/` — public kline REST + reconnecting WebSocket clients.
+- `strategies/HA_flips.py` — independent Heikin-Ashi colour-flip decision module (not yet wired into the live loop).
+- `main.py` — entry point that loads the PaperEngine and polls bot state.
+- `dashboard.py` — Streamlit UI with START / PAUSE / RESTART / FORCE CLOSE ALL / STOP controls that write to the SQLite control table.
 
 ## Quick start
-Python 3.10+:
-    python -m venv .venv
-    # Windows: .venv\Scripts\activate
-    # Linux/macOS: source .venv/bin/activate
-    pip install -r requirements.txt
-    copy .env.example .env
-    python main.py
 
-In a second terminal, activate the environment and run:
-    streamlit run dashboard.py
+```bash
+python -m venv .venv
+source .venv/bin/activate   # or .venv\Scripts\activate on Windows
+pip install -r requirements.txt
+cp .env.example .env
+python main.py
+```
+
+In another terminal:
+
+```bash
+streamlit run dashboard.py
+```
+
 Open http://localhost:8501.
 
-## Docker
-    cp .env.example .env
-    docker compose up --build -d
-Open http://localhost:8501. Logs: docker compose logs -f. Stop: docker compose down.
+## Controls
 
-Configure symbol, leverage, paper margin, starting wallet, fee assumption and EMA periods in .env. Do not add exchange API keys.
+See `RUNNING.md` for full details. Summary:
+
+- **START** — enable new entries
+- **PAUSE** — block new entries, continue managing open positions
+- **RESTART** — return to RUNNING (state preserved)
+- **FORCE CLOSE ALL** — close every paper position at latest marks (confirmation required)
+- **STOP** — request shutdown; returns to IDLE after positions are closed
+
+## Recovery
+
+Positions, wallet, trade history, and bot state are stored in `data/paper_engine.sqlite3` and restored on restart.
+
+## Safety
+
+- Never submits real orders.
+- No authenticated trading endpoints.
+- No secrets or tokens required.
