@@ -20,9 +20,9 @@ Action = Literal["OPEN_LONG", "OPEN_SHORT", "CLOSE_AND_REVERSE", "CLOSE_TAKE_PRO
 class HAFlipsSettings:
     """Global settings shared by every symbol and every transaction."""
 
+    take_profit_usdt: float
+    stop_loss_usdt: float
     timeframe: Timeframe = "15m"
-    take_profit_usdt: float = 10.0
-    stop_loss_usdt: float = 5.0
     cooldown_minutes: int = 15
 
     def __post_init__(self) -> None:
