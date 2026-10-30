@@ -44,8 +44,8 @@ class PaperEngineTests(unittest.TestCase):
         self.assertAlmostEqual(self.engine._gross_pnl(self.engine._positions["ETHUSDT"], 90), 39.92015968063872)
 
     def test_fees_and_funding_are_included_in_net_pnl(self):
-        self.engine.open_position("BTCUSDT", "LONG", 100)
-        payment = self.engine.apply_funding("BTCUSDT", 0.001, 100)
+        self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
+        payment = self.engine.apply_funding("BTCUSDT", 0.001, 100, funding_time_ms=2_000)
         self.assertAlmostEqual(payment, -0.3992015968063872)
         net = self.engine.close_position("BTCUSDT", 101)
         # Net includes gross PnL, both fees, and funding paid.
@@ -56,8 +56,8 @@ class PaperEngineTests(unittest.TestCase):
         self.assertAlmostEqual(snap["funding_net"], -0.3992015968063872)
 
     def test_short_funding_receives_when_rate_is_positive(self):
-        self.engine.open_position("ETHUSDT", "SHORT", 100)
-        self.assertAlmostEqual(self.engine.apply_funding("ETHUSDT", 0.001, 100), 0.3992015968063872)
+        self.engine.open_position("ETHUSDT", "SHORT", 100, now_ms=1_000)
+        self.assertAlmostEqual(self.engine.apply_funding("ETHUSDT", 0.001, 100, funding_time_ms=2_000), 0.3992015968063872)
 
     def test_restart_recovers_open_positions(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
