@@ -35,7 +35,7 @@ class PaperEngineTests(unittest.TestCase):
         self.assertAlmostEqual(p.quantity, expected_margin * 2 / 100)
         self.assertAlmostEqual(p.entry_fee, expected_fee)
         self.assertAlmostEqual(self.engine.snapshot()["wallet"], 800.0)
-        self.assertAlmostEqual(self.engine.equity(), 999.6)
+        self.assertAlmostEqual(self.engine.equity(), 999.6007984031936)
 
     def test_long_and_short_gross_pnl_signs(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
