@@ -15,6 +15,7 @@ from typing import Literal
 
 Side = Literal["LONG", "SHORT"]
 AllocationMode = Literal["fixed", "compounding"]
+BotState = Literal["IDLE", "RUNNING", "PAUSED", "STOPPING"]
 
 
 @dataclass(frozen=True)
@@ -105,10 +106,20 @@ class PaperEngine:
                 symbol TEXT PRIMARY KEY,
                 until_ms INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS bot_control (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                state TEXT NOT NULL DEFAULT 'IDLE',
+                updated_at INTEGER NOT NULL
+            );
         """)
         self._db.execute(
             "INSERT OR IGNORE INTO paper_account(id,wallet) VALUES(1,?)",
             (self.settings.initial_capital,),
+        )
+        now = int(time.time() * 1000)
+        self._db.execute(
+            "INSERT OR IGNORE INTO bot_control(id,state,updated_at) VALUES(1,'IDLE',?)",
+            (now,),
         )
         self._db.commit()
         self._positions: dict[str, PaperPosition] = {}
@@ -128,6 +139,41 @@ class PaperEngine:
     def close(self):
         with self._lock:
             self._db.close()
+
+    def get_bot_state(self) -> BotState:
+        with self._lock:
+            row = self._db.execute("SELECT state FROM bot_control WHERE id=1").fetchone()
+            return row["state"] if row else "IDLE"
+
+    def set_bot_state(self, state: BotState) -> None:
+        if state not in ("IDLE", "RUNNING", "PAUSED", "STOPPING"):
+            raise ValueError("invalid bot state")
+        with self._lock:
+            self._db.execute(
+                "UPDATE bot_control SET state=?, updated_at=? WHERE id=1",
+                (state, int(time.time() * 1000)),
+            )
+            self._db.commit()
+
+    def force_close_all(self, marks: dict[str, float]) -> dict[str, str]:
+        """Close every open position at the supplied mark prices.
+
+        Returns a dict of symbol -> result ('closed' or error message).
+        """
+        results = {}
+        with self._lock:
+            symbols = list(self._positions.keys())
+            for symbol in symbols:
+                price = marks.get(symbol)
+                if price is None or not isfinite(price) or price <= 0:
+                    results[symbol] = "missing or invalid mark price"
+                    continue
+                try:
+                    self.close_position(symbol, price, reason="FORCE_CLOSE")
+                    results[symbol] = "closed"
+                except Exception as exc:
+                    results[symbol] = str(exc)
+        return results
 
     def _account(self):
         return self._db.execute("SELECT * FROM paper_account WHERE id=1").fetchone()
@@ -189,8 +235,6 @@ class PaperEngine:
                 raise ValueError("maximum active position count reached")
             if self.is_in_cooldown(symbol, now_ms):
                 raise ValueError(f"{symbol} is in take-profit cooldown")
-            # Treat each slot as an all-in budget: isolated margin plus its
-            # opening fee must fit within one-fifth of the allocation base.
             slot_budget = self._allocation()
             margin = slot_budget / (1.0 + self.settings.leverage * self.settings.taker_fee_rate)
             if margin <= 0:
@@ -225,7 +269,6 @@ class PaperEngine:
             raise ValueError("funding_rate must be finite")
         with self._lock:
             p = self._positions[symbol]
-            # Positive rate: longs pay, shorts receive.
             signed_payment = -p.quantity * mark_price * funding_rate
             if p.side == "SHORT":
                 signed_payment = -signed_payment
@@ -315,6 +358,7 @@ class PaperEngine:
                 "fees_paid": float(account["fees_paid"]),
                 "funding_net": float(account["funding_net"]),
                 "active_positions": len(self._positions),
+                "bot_state": self.get_bot_state(),
                 "positions": {
                     symbol: {
                         "side": p.side, "quantity": p.quantity,
