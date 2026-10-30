@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import threading
+from math import isfinite
 import time
 from typing import Iterable
 
@@ -110,7 +111,7 @@ class FuturesPaperRuntime:
             symbol = str(row.get("symbol", "")).upper()
             if symbol in wanted:
                 price = float(row["markPrice"])
-                if price > 0:
+                if isfinite(price) and price > 0:
                     updated[symbol] = price
         # Return only marks from this response. Cached marks may be stale and
         # must never be used to close or manage a position after a data outage.
