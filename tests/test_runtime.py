@@ -1,7 +1,9 @@
 """Offline tests for the public-data paper runtime orchestration."""
 import os
 import tempfile
+import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from paper_engine.engine import PaperEngine, PaperEngineSettings
@@ -44,6 +46,26 @@ class RuntimeControlTests(unittest.TestCase):
 
     def test_stop_with_no_positions_is_already_complete(self):
         self.assertTrue(self.runtime._close_all_and_verify())
+
+    def test_entry_is_skipped_when_mark_price_is_stale_or_missing(self):
+        self.engine.set_bot_state("RUNNING")
+        decision = SimpleNamespace(action="OPEN_LONG", side="LONG")
+        candle = SimpleNamespace(symbol="BTCUSDT", interval="15m", close=100)
+        with patch.object(self.runtime.strategy, "on_closed_candles", return_value=decision):
+            self.runtime._on_closed_candle(candle)
+        self.assertEqual(self.engine.snapshot()["active_positions"], 0)
+        self.assertIn("no fresh public mark price", self.runtime.last_error)
+
+    def test_entry_uses_fresh_mark_not_candle_close(self):
+        self.engine.set_bot_state("RUNNING")
+        self.runtime._marks = {"BTCUSDT": 105.0}
+        self.runtime._marks_updated_at = time.monotonic()
+        decision = SimpleNamespace(action="OPEN_LONG", side="LONG")
+        candle = SimpleNamespace(symbol="BTCUSDT", interval="15m", close=100)
+        with patch.object(self.runtime.strategy, "on_closed_candles", return_value=decision):
+            self.runtime._on_closed_candle(candle)
+        position = self.engine.snapshot()["positions"]["BTCUSDT"]
+        self.assertEqual(position["entry_price"], 105.0)
 
     def test_invalid_symbol_list_is_rejected(self):
         with self.assertRaises(ValueError):
