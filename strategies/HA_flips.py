@@ -8,7 +8,7 @@ funding, and must execute/validate returned decisions in its paper engine.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Literal, Optional
 
 Side = Literal["LONG", "SHORT"]
@@ -124,7 +124,7 @@ class HAFlipsStrategy:
             current = now or datetime.now(timezone.utc)
             if current.tzinfo is None:
                 current = current.replace(tzinfo=timezone.utc)
-            until = current + __import__("datetime").timedelta(minutes=self.settings.cooldown_minutes)
+            until = current + timedelta(minutes=self.settings.cooldown_minutes)
             self._cooldown_until[symbol] = until
             return Decision(
                 "CLOSE_TAKE_PROFIT", symbol,
