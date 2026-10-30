@@ -270,16 +270,45 @@ class PaperEngine:
             del self._positions[symbol]
             return net
 
-    def evaluate_exit(self, symbol: str, mark_price: float,
+        def evaluate_exit(self, symbol: str, mark_price: float,
                       now_ms: int | None = None) -> str | None:
-        net = self.position_net_pnl(symbol, mark_price)
-        if net >= self.settings.take_profit_usdt:
-            self.close_position(symbol, mark_price, "TAKE_PROFIT", now_ms)
-            return "TAKE_PROFIT"
-        if net <= -self.settings.stop_loss_usdt:
-            self.close_position(symbol, mark_price, "STOP_LOSS", now_ms)
-            return "STOP_LOSS"
-        return None
+        symbol = symbol.strip().upper()
+        self._validate_price(mark_price)
+
+        with self._lock:
+            if symbol not in self._positions:
+                return None
+
+            position = self._positions[symbol]
+            net = self.position_net_pnl(symbol, mark_price)
+
+            if net >= self.settings.take_profit_usdt:
+                self.close_position(
+                    symbol, mark_price, "TAKE_PROFIT", now_ms
+                )
+                return "TAKE_PROFIT"
+
+            if net <= -self.settings.stop_loss_usdt:
+                opposite_side = (
+                    "SHORT" if position.side == "LONG" else "LONG"
+                )
+
+                # Close the losing position first.
+                self.close_position(
+                    symbol, mark_price, "STOP_LOSS", now_ms
+                )
+
+                # Attempt reversal using the remaining paper-account funds.
+                try:
+                    self.open_position(
+                        symbol, opposite_side, mark_price, now_ms
+                    )
+                    return "STOP_LOSS_REVERSED"
+                except ValueError:
+                    # If funds are insufficient, remain safely flat.
+                    return "STOP_LOSS"
+
+            return None
 
     def snapshot(self, marks: dict[str, float] | None = None) -> dict:
         with self._lock:
