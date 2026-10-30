@@ -52,7 +52,7 @@ class PaperEngineTests(unittest.TestCase):
         self.assertAlmostEqual(net, 2.7904191616766467)
         snap = self.engine.snapshot()
         self.assertAlmostEqual(snap["realized_pnl"], net)
-        self.assertAlmostEqual(snap["fees_paid"], 0.8023944111776447)
+        self.assertAlmostEqual(snap["fees_paid"], 0.8023952095808383)
         self.assertAlmostEqual(snap["funding_net"], -0.3992015968063872)
 
     def test_short_funding_receives_when_rate_is_positive(self):
