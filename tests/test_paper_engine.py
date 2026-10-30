@@ -77,11 +77,22 @@ class PaperEngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=2_001)
 
-    def test_stop_loss_closes_position(self):
+    def test_stop_loss_closes_and_reverses_when_margin_is_available(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
         result = self.engine.evaluate_exit("BTCUSDT", 97)
+        self.assertEqual(result, "STOP_LOSS_REVERSED")
+        snap = self.engine.snapshot()
+        self.assertEqual(snap["active_positions"], 1)
+        self.assertEqual(snap["positions"]["BTCUSDT"]["side"], "SHORT")
+
+    def test_stop_loss_closes_without_reversal_when_margin_is_insufficient(self):
+        for i in range(5):
+            self.engine.open_position(f"COIN{i}USDT", "LONG", 100)
+        result = self.engine.evaluate_exit("COIN0USDT", 97)
         self.assertEqual(result, "STOP_LOSS")
-        self.assertEqual(self.engine.snapshot()["active_positions"], 0)
+        snap = self.engine.snapshot()
+        self.assertEqual(snap["active_positions"], 4)
+        self.assertNotIn("COIN0USDT", snap["positions"])
 
     def test_invalid_settings_and_prices_are_rejected(self):
         with self.assertRaises(ValueError):
