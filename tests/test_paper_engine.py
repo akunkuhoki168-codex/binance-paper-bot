@@ -29,10 +29,12 @@ class PaperEngineTests(unittest.TestCase):
 
     def test_isolated_margin_and_entry_fee_are_reserved(self):
         p = self.engine.open_position("BTCUSDT", "LONG", 100)
-        self.assertAlmostEqual(p.margin, 200)
-        self.assertAlmostEqual(p.quantity, 4)
-        self.assertAlmostEqual(p.entry_fee, 0.4)
-        self.assertAlmostEqual(self.engine.snapshot()["wallet"], 799.6)
+        expected_margin = 200 / 1.002
+        expected_fee = 0.4 / 1.002
+        self.assertAlmostEqual(p.margin, expected_margin)
+        self.assertAlmostEqual(p.quantity, expected_margin * 2 / 100)
+        self.assertAlmostEqual(p.entry_fee, expected_fee)
+        self.assertAlmostEqual(self.engine.snapshot()["wallet"], 800.0)
         self.assertAlmostEqual(self.engine.equity(), 999.6)
 
     def test_long_and_short_gross_pnl_signs(self):
@@ -44,18 +46,18 @@ class PaperEngineTests(unittest.TestCase):
     def test_fees_and_funding_are_included_in_net_pnl(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
         payment = self.engine.apply_funding("BTCUSDT", 0.001, 100)
-        self.assertAlmostEqual(payment, -0.4)
+        self.assertAlmostEqual(payment, -0.3992015968063872)
         net = self.engine.close_position("BTCUSDT", 101)
-        # +4 gross - 0.4 entry fee - 0.404 exit fee - 0.4 funding
-        self.assertAlmostEqual(net, 2.796)
+        # Net includes gross PnL, both fees, and funding paid.
+        self.assertAlmostEqual(net, 2.7904191616766467)
         snap = self.engine.snapshot()
         self.assertAlmostEqual(snap["realized_pnl"], net)
-        self.assertAlmostEqual(snap["fees_paid"], 0.804)
-        self.assertAlmostEqual(snap["funding_net"], -0.4)
+        self.assertAlmostEqual(snap["fees_paid"], 0.8023944111776447)
+        self.assertAlmostEqual(snap["funding_net"], -0.3992015968063872)
 
     def test_short_funding_receives_when_rate_is_positive(self):
         self.engine.open_position("ETHUSDT", "SHORT", 100)
-        self.assertAlmostEqual(self.engine.apply_funding("ETHUSDT", 0.001, 100), 0.4)
+        self.assertAlmostEqual(self.engine.apply_funding("ETHUSDT", 0.001, 100), 0.3992015968063872)
 
     def test_restart_recovers_open_positions(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
@@ -64,7 +66,7 @@ class PaperEngineTests(unittest.TestCase):
         snap = self.engine.snapshot()
         self.assertEqual(snap["active_positions"], 1)
         self.assertEqual(snap["positions"]["BTCUSDT"]["side"], "LONG")
-        self.assertAlmostEqual(snap["positions"]["BTCUSDT"]["margin"], 200)
+        self.assertAlmostEqual(snap["positions"]["BTCUSDT"]["margin"], 200 / 1.002)
 
     def test_take_profit_closes_and_starts_persistent_cooldown(self):
         self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
@@ -90,9 +92,11 @@ class PaperEngineTests(unittest.TestCase):
     def test_fixed_allocation_does_not_silently_shrink_to_remaining_wallet(self):
         for i in range(4):
             self.engine.open_position(f"COIN{i}USDT", "LONG", 100)
-        # Wallet is less than the next fixed $200 allocation plus fee.
+        # Four slots consume four all-in allocations; the fifth still fits.
+        self.engine.open_position("FIFTHUSDT", "LONG", 100)
+        self.assertEqual(self.engine.snapshot()["active_positions"], 5)
         with self.assertRaises(ValueError):
-            self.engine.open_position("FIFTHUSDT", "LONG", 100)
+            self.engine.open_position("SIXTHUSDT", "LONG", 100)
 
 
 if __name__ == "__main__":
