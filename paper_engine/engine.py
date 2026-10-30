@@ -189,7 +189,10 @@ class PaperEngine:
                 raise ValueError("maximum active position count reached")
             if self.is_in_cooldown(symbol, now_ms):
                 raise ValueError(f"{symbol} is in take-profit cooldown")
-            margin = self._allocation()
+            # Treat each slot as an all-in budget: isolated margin plus its
+            # opening fee must fit within one-fifth of the allocation base.
+            slot_budget = self._allocation()
+            margin = slot_budget / (1.0 + self.settings.leverage * self.settings.taker_fee_rate)
             if margin <= 0:
                 raise ValueError("no safe allocation available")
             notional = margin * self.settings.leverage
