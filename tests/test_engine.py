@@ -29,12 +29,33 @@ class PaperEngineAccountingTests(unittest.TestCase):
 
     def test_net_pnl_includes_entry_fee_exit_fee_and_funding(self):
         position = self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1)
-        funding = self.engine.apply_funding("BTCUSDT", 0.0001, 100)
+        funding = self.engine.apply_funding("BTCUSDT", 0.0001, 100, funding_time_ms=2)
         mark = 101
         gross = (mark - position.entry_price) * position.quantity
         exit_fee = position.quantity * mark * self.engine.settings.taker_fee_rate
         expected = gross - position.entry_fee - exit_fee + funding
         self.assertAlmostEqual(self.engine.position_net_pnl("BTCUSDT", mark), expected)
+
+    def test_duplicate_funding_event_is_applied_only_once(self):
+        position = self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1)
+        first = self.engine.apply_funding(
+            "BTCUSDT", 0.0001, 100, funding_time_ms=2
+        )
+        second = self.engine.apply_funding(
+            "BTCUSDT", 0.0001, 100, funding_time_ms=2
+        )
+        self.assertNotEqual(first, 0.0)
+        self.assertEqual(second, 0.0)
+        self.assertAlmostEqual(
+            self.engine.snapshot()["positions"]["BTCUSDT"]["funding_net"], first
+        )
+
+    def test_funding_before_position_open_is_ignored(self):
+        self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=10)
+        payment = self.engine.apply_funding(
+            "BTCUSDT", 0.0001, 100, funding_time_ms=9
+        )
+        self.assertEqual(payment, 0.0)
 
     def test_force_close_reports_missing_mark_and_keeps_position_open(self):
         self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1)
