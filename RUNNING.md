@@ -1,28 +1,28 @@
 # Run the Binance Futures Paper Bot
 
-Live public Futures market data; simulated trades only. This project has no live order capability and does not need Binance API keys.
-
-The runtime is the SQLite-backed `paper_engine.engine.PaperEngine`. Positions, wallet, trades, and bot state survive restarts.
+**Paper trading only.** The application uses unauthenticated public Binance USDⓈ-M Futures market-data endpoints. It does not submit exchange orders and does not require API keys.
 
 ## Setup
 
 ```bash
 python -m venv .venv
-# Windows: .venv\Scripts\activate
+# Windows: .venv\\Scripts\\activate
 # Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # or copy on Windows
 ```
 
-## Start the bot
+## Start the runtime
 
 ```bash
 python main.py
 ```
 
-The process loads any existing positions from `data/paper_engine.sqlite3` and waits for dashboard controls (or the `bot_control` table).
+At startup, the runtime fetches completed historical candles for each configured symbol, loads persisted SQLite positions, starts the public kline WebSocket feed, and refreshes public mark prices.
 
-## Dashboard
+Default symbols: BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT.
+Default strategy interval: 15m.
+
+## Start the dashboard
 
 In a second terminal:
 
@@ -30,36 +30,33 @@ In a second terminal:
 streamlit run dashboard.py
 ```
 
-Open http://localhost:8501.
+Open http://localhost:8501. Keep the `main.py` process running. The dashboard writes control states to the same SQLite database; it does not launch or restart OS processes.
 
-### Controls
+## Controls
 
-| Button | Effect |
-|--------|--------|
-| **START** | Sets state to RUNNING. New entries allowed. |
-| **PAUSE** | Sets state to PAUSED. No new entries; existing positions continue to be monitored for TP/SL. |
-| **RESTART** | Sets state back to RUNNING (positions and history preserved). |
-| **FORCE CLOSE ALL** | Closes every open paper position at the latest mark prices. Requires confirmation. |
-| **STOP** | Requests STOPPING. After positions are closed the process should return to IDLE. Only START reactivates it. |
+| Control | Behaviour |
+|---|---|
+| **START / RESUME** | Enables new entries from newly completed HA flip candles. |
+| **PAUSE** | Blocks new entries; existing positions continue to be monitored for net-PnL TP/SL. |
+| **RESTART SIGNALS** | Sets the state to RUNNING and resumes signal processing. It does not restart the process. |
+| **FORCE CLOSE ALL** | Requires confirmation; fetches public mark prices and attempts to close all open paper positions. |
+| **STOP BOT** | Requests STOPPING. Runtime closes positions at valid public marks, verifies zero positions remain, sets IDLE, and exits. If a mark is unavailable, shutdown remains pending and retries. |
 
-Controls write to the SQLite `bot_control` table. The running `main.py` process reads that table.
+## Environment variables
 
-## Restart & recovery
+- `DB_PATH`: shared SQLite database path.
+- `FUTURES_SYMBOLS`: comma-separated symbols, e.g. `BTCUSDT,ETHUSDT`.
+- `STRATEGY_INTERVAL`: `15m`, `1h`, or `4h`.
+- `SEED_CANDLES`: historical completed candles per symbol (2–1500).
+- `MARK_POLL_SECONDS`: mark-price polling interval.
+- `STARTING_BALANCE_USDT`, `MAX_POSITIONS`, `LEVERAGE`, `TAKER_FEE_RATE`, `TAKE_PROFIT_USDT`, `STOP_LOSS_USDT`: paper-account configuration.
 
-- Open positions, wallet, realized PnL, fees, and cooldowns are stored in SQLite.
-- Restarting the process (or the machine) reloads them automatically.
-- The bot state (IDLE/RUNNING/PAUSED) is also persisted.
+Set the same `DB_PATH` for the runtime and dashboard.
 
-## Limitations
+## Recovery and limitations
 
-- Paper trading only.
-- Full multi-symbol HA strategy + live WebSocket loop is not yet wired into the heartbeat in `main.py` (the engine and market_data modules are ready to be connected).
-- Simulated fills use the supplied mark/price; no queue, partial fills, or exact exchange liquidation mechanics.
-- Dashboard requires a browser refresh or Streamlit rerun to reflect the latest DB state.
-
-## Troubleshooting
-
-- No database: run `python main.py` once to create it.
-- Dashboard shows no data: confirm `DB_PATH` matches between bot and dashboard.
-- Controls do nothing: the bot process must be running and polling `bot_control`.
-- Reset everything: stop the process and delete `data/paper_engine.sqlite3`.
+- SQLite preserves wallet, open positions, trades, and cooldowns across process restarts.
+- If the runtime crashes, restart `python main.py`; open positions are recovered and managed after the runtime reconnects.
+- Strategy cooldown/last-candle in-memory state is rebuilt from fresh market data, not separately persisted.
+- Simulated fills use current mark prices and do not model order-book depth, partial fills, slippage, liquidation mechanics, or exact funding settlement schedules.
+- The dashboard requires Streamlit reruns/refreshes to display updated state.
