@@ -2,37 +2,64 @@
 
 Live public Futures market data; simulated trades only. This project has no live order capability and does not need Binance API keys.
 
-## Windows
-    python -m venv .venv
-    .venv\Scripts\activate
-    pip install -r requirements.txt
-    copy .env.example .env
-    python main.py
+The runtime is the SQLite-backed `paper_engine.engine.PaperEngine`. Positions, wallet, trades, and bot state survive restarts.
 
-Open a second PowerShell window in the project folder:
-    .venv\Scripts\activate
-    streamlit run dashboard.py
+## Setup
+
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # or copy on Windows
+```
+
+## Start the bot
+
+```bash
+python main.py
+```
+
+The process loads any existing positions from `data/paper_engine.sqlite3` and waits for dashboard controls (or the `bot_control` table).
+
+## Dashboard
+
+In a second terminal:
+
+```bash
+streamlit run dashboard.py
+```
 
 Open http://localhost:8501.
 
-## Linux/macOS
-    python3 -m venv .venv
-    source .venv/bin/activate
-    pip install -r requirements.txt
-    cp .env.example .env
-    python main.py
+### Controls
 
-In another terminal run streamlit run dashboard.py.
+| Button | Effect |
+|--------|--------|
+| **START** | Sets state to RUNNING. New entries allowed. |
+| **PAUSE** | Sets state to PAUSED. No new entries; existing positions continue to be monitored for TP/SL. |
+| **RESTART** | Sets state back to RUNNING (positions and history preserved). |
+| **FORCE CLOSE ALL** | Closes every open paper position at the latest mark prices. Requires confirmation. |
+| **STOP** | Requests STOPPING. After positions are closed the process should return to IDLE. Only START reactivates it. |
 
-## Docker / VPS
-    cp .env.example .env
-    docker compose up --build -d
+Controls write to the SQLite `bot_control` table. The running `main.py` process reads that table.
 
-Dashboard: http://localhost:8501
-Logs: docker compose logs -f
-Stop: docker compose down
+## Restart & recovery
 
-Use persistent storage for the data directory. Do not expose the dashboard publicly without firewall or reverse-proxy authentication.
+- Open positions, wallet, realized PnL, fees, and cooldowns are stored in SQLite.
+- Restarting the process (or the machine) reloads them automatically.
+- The bot state (IDLE/RUNNING/PAUSED) is also persisted.
 
 ## Limitations
-This is a development build, not production-ready unattended software. Open paper positions are not restored after restart, the daily loss circuit breaker is not implemented, simulated fills are simplified, and dashboard refresh is manual.
+
+- Paper trading only.
+- Full multi-symbol HA strategy + live WebSocket loop is not yet wired into the heartbeat in `main.py` (the engine and market_data modules are ready to be connected).
+- Simulated fills use the supplied mark/price; no queue, partial fills, or exact exchange liquidation mechanics.
+- Dashboard requires a browser refresh or Streamlit rerun to reflect the latest DB state.
+
+## Troubleshooting
+
+- No database: run `python main.py` once to create it.
+- Dashboard shows no data: confirm `DB_PATH` matches between bot and dashboard.
+- Controls do nothing: the bot process must be running and polling `bot_control`.
+- Reset everything: stop the process and delete `data/paper_engine.sqlite3`.
