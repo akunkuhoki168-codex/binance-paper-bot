@@ -54,7 +54,12 @@ class KlineWebSocket:
             packet = json.loads(message)
             candle, closed = self.manager_packet(packet)
             if closed and self.on_candle is not None:
-                self.on_candle(candle)
+                try:
+                    self.on_candle(candle)
+                except Exception as exc:
+                    # A strategy/engine callback failure must not kill the
+                    # market-data receive loop. Keep the feed alive and report it.
+                    print(f"Closed-candle callback error: {exc}")
         except (ValueError, TypeError, KeyError):
             # Ignore malformed market-data messages; the connection remains alive.
             return
