@@ -1,20 +1,84 @@
-import os,json,sqlite3
+"""Streamlit dashboard for the SQLite-backed Futures paper bot.
+
+Controls write to the bot_control table. The running process (main.py)
+reads that table. All trading remains simulated.
+"""
+import os
+import sqlite3
+import time
 from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
+
+from paper_engine.engine import PaperEngine, PaperEngineSettings
+
 load_dotenv()
-DB=os.getenv("DB_PATH","data/trading.db")
-st.set_page_config(page_title="Binance Futures Paper Bot",page_icon="📈",layout="wide")
+DB = os.getenv("DB_PATH", "data/paper_engine.sqlite3")
+
+st.set_page_config(page_title="Binance Futures Paper Bot", page_icon="📈", layout="wide")
 st.title("Binance Futures Paper Trading")
 st.caption("Live public Binance USDⓈ-M data · Simulated paper execution only · No live orders")
-if not Path(DB).exists(): st.info("Start the bot using python main.py, then refresh this dashboard."); st.stop()
-db=sqlite3.connect(DB); a=pd.read_sql_query("SELECT * FROM account WHERE id=1",db); m=pd.read_sql_query("SELECT payload FROM market WHERE id=1",db); trades=pd.read_sql_query("SELECT * FROM trades ORDER BY id DESC LIMIT 200",db)
-if m.empty: st.info("Waiting for market data..."); st.stop()
-d=json.loads(m.iloc[0]["payload"]); mark=float(d.get("mark_price") or d.get("last_price") or 0); wallet=float(a.iloc[0]["wallet"])
-c=st.columns(4); c[0].metric("BTC mark price",f"{mark:,.2f} USDT"); c[1].metric("Paper wallet",f"{wallet:,.2f} USDT"); c[2].metric("Funding rate",f"{float(d.get('funding_rate',0))*100:.4f}%"); c[3].metric("24h quote volume",f"{float(d.get('quote_volume_24h',0)):,.0f} USDT")
-st.subheader("Live market data"); c=st.columns(4); c[0].metric("Best bid",f"{float(d.get('bid',0)):,.2f}"); c[1].metric("Best ask",f"{float(d.get('ask',0)):,.2f}"); c[2].metric("Index price",f"{float(d.get('index_price',0)):,.2f}"); c[3].metric("Open interest",f"{float(d.get('open_interest',0)):,.3f} BTC")
-st.subheader("Recent simulated trades")
-if trades.empty: st.info("No trades yet. The EMA strategy waits for a crossover.")
-else: st.dataframe(trades,use_container_width=True,hide_index=True)
-st.caption("Refresh the browser to update. This dashboard cannot place orders.")
+
+if not Path(DB).exists():
+    st.info("Start the bot with `python main.py`, then refresh.")
+    st.stop()
+
+settings = PaperEngineSettings()
+engine = PaperEngine(DB, settings)
+
+col1, col2, col3, col4, col5 = st.columns(5)
+
+if col1.button("START", use_container_width=True):
+    engine.set_bot_state("RUNNING")
+    st.success("START → RUNNING (new entries enabled)")
+
+if col2.button("PAUSE", use_container_width=True):
+    engine.set_bot_state("PAUSED")
+    st.warning("PAUSE → no new entries; existing positions still managed")
+
+if col3.button("RESTART", use_container_width=True):
+    engine.set_bot_state("RUNNING")
+    st.info("RESTART → state set to RUNNING (positions preserved)")
+
+if col4.button("FORCE CLOSE ALL", use_container_width=True):
+    if st.session_state.get("confirm_force_close"):
+        # In a real deployment the caller supplies current mark prices.
+        marks = {s: 0 for s in engine.snapshot()["positions"]}  # placeholder
+        results = engine.force_close_all(marks)
+        st.write(results)
+        st.session_state["confirm_force_close"] = False
+    else:
+        st.session_state["confirm_force_close"] = True
+        st.error("Click FORCE CLOSE ALL again to confirm. Positions will be closed at latest marks.")
+
+if col5.button("STOP", use_container_width=True):
+    engine.set_bot_state("STOPPING")
+    st.error("STOP requested. Close remaining positions then set to IDLE.")
+
+snap = engine.snapshot()
+st.metric("Bot state", snap.get("bot_state", "IDLE"))
+st.metric("Paper wallet", f"{snap['wallet']:.2f} USDT")
+st.metric("Equity", f"{snap['equity']:.2f} USDT")
+st.metric("Active positions", snap["active_positions"])
+
+if snap["positions"]:
+    st.subheader("Open positions")
+    st.dataframe(pd.DataFrame(snap["positions"]).T, use_container_width=True)
+
+st.subheader("Recent trades")
+try:
+    with sqlite3.connect(DB) as db:
+        trades = pd.read_sql_query(
+            "SELECT * FROM paper_trades ORDER BY id DESC LIMIT 50", db
+        )
+    if not trades.empty:
+        st.dataframe(trades, use_container_width=True, hide_index=True)
+    else:
+        st.info("No trades yet.")
+except Exception as exc:
+    st.warning(f"Could not read trades: {exc}")
+
+st.caption("Controls update the SQLite bot_control table. The bot process must be running to act on them. Paper trading only.")
+engine.close()
