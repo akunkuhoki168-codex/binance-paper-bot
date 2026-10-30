@@ -106,6 +106,15 @@ class PaperEngine:
                 symbol TEXT PRIMARY KEY,
                 until_ms INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS paper_funding_events (
+                symbol TEXT NOT NULL,
+                funding_time INTEGER NOT NULL,
+                funding_rate REAL NOT NULL,
+                mark_price REAL NOT NULL,
+                payment REAL NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY(symbol, funding_time)
+            );
             CREATE TABLE IF NOT EXISTS bot_control (
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 state TEXT NOT NULL DEFAULT 'IDLE',
@@ -261,28 +270,55 @@ class PaperEngine:
             self._positions[symbol] = p
             return p
 
+    def last_funding_time(self, symbol: str) -> int | None:
+        """Return latest persisted funding timestamp for an open position."""
+        symbol = symbol.strip().upper()
+        with self._lock:
+            row = self._db.execute(
+                "SELECT MAX(funding_time) AS latest FROM paper_funding_events WHERE symbol=?",
+                (symbol,),
+            ).fetchone()
+            if row and row["latest"] is not None:
+                return int(row["latest"])
+            position = self._positions.get(symbol)
+            return position.opened_at if position else None
+
     def apply_funding(self, symbol: str, funding_rate: float,
-                      mark_price: float) -> float:
+                      mark_price: float, funding_time_ms: int | None = None) -> float:
+        """Apply one settled funding event once; duplicate timestamps are ignored."""
         symbol = symbol.strip().upper()
         self._validate_price(mark_price)
         if not isfinite(funding_rate):
             raise ValueError("funding_rate must be finite")
+        if not isinstance(funding_time_ms, int) or funding_time_ms < 0:
+            raise ValueError("funding_time_ms must be a non-negative integer")
         with self._lock:
-            p = self._positions[symbol]
-            signed_payment = -p.quantity * mark_price * funding_rate
+            p = self._positions.get(symbol)
+            if p is None or funding_time_ms < p.opened_at:
+                return 0.0
+            payment = -p.quantity * mark_price * funding_rate
             if p.side == "SHORT":
-                signed_payment = -signed_payment
+                payment = -payment
             with self._db:
+                cursor = self._db.execute(
+                    "INSERT OR IGNORE INTO paper_funding_events "
+                    "(symbol,funding_time,funding_rate,mark_price,payment,created_at) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (symbol, funding_time_ms, funding_rate, mark_price, payment,
+                     int(time.time() * 1000)),
+                )
+                if cursor.rowcount == 0:
+                    return 0.0
                 self._db.execute(
                     "UPDATE paper_account SET wallet=wallet+?, funding_net=funding_net+? WHERE id=1",
-                    (signed_payment, signed_payment),
+                    (payment, payment),
                 )
                 self._db.execute(
                     "UPDATE paper_positions SET funding_net=funding_net+? WHERE symbol=?",
-                    (signed_payment, symbol),
+                    (payment, symbol),
                 )
-            p.funding_net += signed_payment
-            return signed_payment
+            p.funding_net += payment
+            return payment
 
     def close_position(self, symbol: str, price: float, reason: str = "MANUAL",
                        now_ms: int | None = None) -> float:
