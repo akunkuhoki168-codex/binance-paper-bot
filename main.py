@@ -47,13 +47,6 @@ def main() -> None:
         stop_loss_usdt=SL,
     )
     engine = PaperEngine(DB_PATH, settings)
-    runtime = FuturesPaperRuntime(
-        engine=engine,
-        symbols=SYMBOLS,
-        interval=INTERVAL,
-        seed_limit=int(os.getenv("SEED_CANDLES", "120")),
-        mark_poll_seconds=float(os.getenv("MARK_POLL_SECONDS", "3")),
-    )
 
     def _handle_signal(*_):
         print("\nShutdown requested; asking runtime to close positions safely.")
@@ -62,10 +55,19 @@ def main() -> None:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
+    runtime = None
     try:
+        runtime = FuturesPaperRuntime(
+            engine=engine,
+            symbols=SYMBOLS,
+            interval=INTERVAL,
+            seed_limit=int(os.getenv("SEED_CANDLES", "120")),
+            mark_poll_seconds=float(os.getenv("MARK_POLL_SECONDS", "3")),
+        )
         runtime.run()
     finally:
-        runtime.stop_feed()
+        if runtime is not None:
+            runtime.stop_feed()
         engine.close()
         print("Paper bot process exited. SQLite database preserved.")
 
