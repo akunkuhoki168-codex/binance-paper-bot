@@ -47,21 +47,25 @@ price
 status
 buy 100
 status
-sell 0.001
+symbol ETH
+price
+backtest BTCUSDT 1h 200
 status
 quit
 ```
 
-- `price` retrieves the latest public BTC/USDT price.
+- `price` retrieves the latest public price for the current symbol.
 - `buy 100` simulates spending 100 USDT from your virtual balance.
-- `sell 0.001` simulates selling 0.001 BTC, if you have enough virtual BTC.
+- `sell 0.001` simulates selling 0.001 of the current base asset (if you hold enough).
+- `symbol ETH` (or `symbol ETHUSDT`) switches the active market.
+- `backtest [symbol] [interval] [candles]` runs a simple SMA crossover backtest.
 - `status` displays the simulated portfolio.
 - `quit` exits the program.
 
 ## Important notes
 
-- This is a manual paper-trading simulator, not an automatic trading strategy yet.
+- This is a manual paper-trading simulator with an optional historical backtest mode.
 - It never sends real buy or sell orders and does not need Binance API keys.
 - Your simulated balance and trade history are saved in `paper_state.json` in the folder where you run the program. Keep that file if you want to preserve your paper portfolio.
-- The bot needs an internet connection to retrieve public market prices.
+- The bot needs an internet connection to retrieve public market prices and historical data.
 - Do not upload passwords, API keys, or secret credentials to GitHub.
