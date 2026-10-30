@@ -57,9 +57,9 @@ class KlineManagerTests(unittest.TestCase):
             "v": "10", "q": "1020", "n": 12, "x": False,
         }}}
         self.assertFalse(manager.add_websocket_packet(packet))
-        self.assertTrue(manager.add_closed(candle(0)))
+        self.assertTrue(manager.add_closed(candle(900_000)))
+        self.assertFalse(manager.add_closed(candle(900_000)))
         self.assertFalse(manager.add_closed(candle(0)))
-        self.assertFalse(manager.add_closed(candle(0 - 900_000)))
         self.assertEqual(len(manager.get("BTCUSDT", "15m")), 1)
 
     def test_cache_is_bounded(self):
