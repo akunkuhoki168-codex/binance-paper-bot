@@ -1,67 +1,38 @@
-# Run the paper-trading bot on Windows
+# Run the Binance Futures Paper Bot
 
-This program uses Python's standard library, so you do not need to install extra Python packages.
+Live public Futures market data; simulated trades only. This project has no live order capability and does not need Binance API keys.
 
-## 1. Install Python
+## Windows
+    python -m venv .venv
+    .venv\Scripts\activate
+    pip install -r requirements.txt
+    copy .env.example .env
+    python main.py
 
-Install Python 3.10 or newer from https://www.python.org/downloads/windows/.
+Open a second PowerShell window in the project folder:
+    .venv\Scripts\activate
+    streamlit run dashboard.py
 
-During installation, tick **Add Python to PATH** if the installer offers that option.
+Open http://localhost:8501.
 
-## 2. Download the repository
+## Linux/macOS
+    python3 -m venv .venv
+    source .venv/bin/activate
+    pip install -r requirements.txt
+    cp .env.example .env
+    python main.py
 
-On the GitHub repository page, click the green **Code** button, then **Download ZIP**. Extract the ZIP file to a folder you can find easily, such as your Desktop.
+In another terminal run streamlit run dashboard.py.
 
-Repository: https://github.com/dedkovic441-hub/binance-paper-bot
+## Docker / VPS
+    cp .env.example .env
+    docker compose up --build -d
 
-## 3. Open a terminal in the project folder
+Dashboard: http://localhost:8501
+Logs: docker compose logs -f
+Stop: docker compose down
 
-Open the extracted `binance-paper-bot` folder in File Explorer. Click the address bar, type `powershell`, and press Enter.
+Use persistent storage for the data directory. Do not expose the dashboard publicly without firewall or reverse-proxy authentication.
 
-## 4. Check Python
-
-Run:
-
-```powershell
-python --version
-```
-
-It should show Python 3.10 or newer. If Windows says Python was not found, install Python and reopen PowerShell.
-
-## 5. Start the bot
-
-Run:
-
-```powershell
-python main.py
-```
-
-You should see a message saying **PAPER MODE ONLY** and a `paper>` prompt.
-
-## 6. Try safe paper commands
-
-Type each command and press Enter:
-
-```text
-price
-status
-buy 100
-status
-sell 0.001
-status
-quit
-```
-
-- `price` retrieves the latest public BTC/USDT price.
-- `buy 100` simulates spending 100 USDT from your virtual balance.
-- `sell 0.001` simulates selling 0.001 BTC, if you have enough virtual BTC.
-- `status` displays the simulated portfolio.
-- `quit` exits the program.
-
-## Important notes
-
-- This is a manual paper-trading simulator, not an automatic trading strategy yet.
-- It never sends real buy or sell orders and does not need Binance API keys.
-- Your simulated balance and trade history are saved in `paper_state.json` in the folder where you run the program. Keep that file if you want to preserve your paper portfolio.
-- The bot needs an internet connection to retrieve public market prices.
-- Do not upload passwords, API keys, or secret credentials to GitHub.
+## Limitations
+This is a development build, not production-ready unattended software. Open paper positions are not restored after restart, the daily loss circuit breaker is not implemented, simulated fills are simplified, and dashboard refresh is manual.
