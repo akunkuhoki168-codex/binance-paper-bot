@@ -64,6 +64,7 @@ class FuturesPaperRuntime:
         self._feed_thread: threading.Thread | None = None
         self._feed: KlineWebSocket | None = None
         self._marks: dict[str, float] = {}
+        self._marks_updated_at = 0.0
         self._lock = threading.RLock()
         self.last_error: str | None = None
 
@@ -115,6 +116,8 @@ class FuturesPaperRuntime:
         # must never be used to close or manage a position after a data outage.
         with self._lock:
             self._marks.update(updated)
+            if updated:
+                self._marks_updated_at = time.monotonic()
             return dict(updated)
 
     def _on_closed_candle(self, candle: FuturesCandle) -> None:
@@ -139,7 +142,17 @@ class FuturesPaperRuntime:
         )
         if decision.action in ("OPEN_LONG", "OPEN_SHORT") and decision.side:
             with self._lock:
-                mark = self._marks.get(candle.symbol, candle.close)
+                marks_are_fresh = (
+                    self._marks_updated_at > 0
+                    and time.monotonic() - self._marks_updated_at
+                    <= max(10.0, self.mark_poll_seconds * 3)
+                )
+                mark = self._marks.get(candle.symbol) if marks_are_fresh else None
+            if mark is None:
+                self.last_error = (
+                    f"{candle.symbol}: entry skipped because no fresh public mark price is available"
+                )
+                return
             try:
                 self.engine.open_position(candle.symbol, decision.side, mark)
                 print(f" PAPER OPEN {candle.symbol} {decision.side} @ {mark:.8g}")
