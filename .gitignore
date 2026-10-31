@@ -3,4 +3,7 @@ __pycache__/
 .venv/
 venv/
 .env
-paper_state.json
+data/
+*.db
+.streamlit/
+.DS_Store
