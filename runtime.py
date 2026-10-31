@@ -176,19 +176,23 @@ class FuturesPaperRuntime:
             start_time = self.engine.last_funding_time(symbol)
             if start_time is None:
                 continue
-            events = self.funding_client.funding_events(symbol, start_time)
-            for event in events:
-                payment = self.engine.apply_funding(
-                    symbol,
-                    event.funding_rate,
-                    event.mark_price,
-                    funding_time_ms=event.funding_time,
-                )
-                if payment:
-                    print(
-                        f" PAPER FUNDING {symbol}: {payment:+.6f} USDT "
-                        f"at rate {event.funding_rate:+.6%}"
+            try:
+                events = self.funding_client.funding_events(symbol, start_time)
+                for event in events:
+                    payment = self.engine.apply_funding(
+                        symbol,
+                        event.funding_rate,
+                        event.mark_price,
+                        funding_time_ms=event.funding_time,
                     )
+                    if payment:
+                        print(
+                            f" PAPER FUNDING {symbol}: {payment:+.6f} USDT "
+                            f"at rate {event.funding_rate:+.6%}"
+                        )
+            except (requests.RequestException, ValueError, KeyError) as exc:
+                # A funding-history outage must never interrupt TP/SL monitoring.
+                self.last_error = f"{symbol}: funding update unavailable: {exc}"
         self._last_funding_poll = now
 
     def _daily_realized_loss_reached(self) -> bool:
