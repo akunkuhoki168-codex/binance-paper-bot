@@ -27,7 +27,6 @@ settings = PaperEngineSettings(
     taker_fee_rate=float(os.getenv("TAKER_FEE_RATE", "0.0005")),
     take_profit_usdt=float(os.getenv("TAKE_PROFIT_USDT", "10")),
     stop_loss_usdt=float(os.getenv("STOP_LOSS_USDT", "5")),
-    daily_loss_limit_usdt=float(os.getenv("DAILY_LOSS_LIMIT_USDT", "50")),
 )
 @st.cache_resource
 def get_engine(db_path: str, engine_settings: PaperEngineSettings) -> PaperEngine:
@@ -131,6 +130,28 @@ if controls[3].button("FORCE CLOSE ALL", use_container_width=True):
         st.session_state["confirm_force_close"] = True
         st.warning("Click FORCE CLOSE ALL again to confirm simulated closes.")
 
+st.subheader("Paper Account Reset")
+if st.button("RESET ACCOUNT TO INITIAL BALANCE", use_container_width=True):
+    if st.session_state.get("confirm_account_reset"):
+        try:
+            restored = engine.reset_account()
+            engine.record_event(
+                f"Paper account reset to initial balance: {restored:.2f} USDT; trade history retained.",
+                "WARNING",
+            )
+            st.session_state["confirm_account_reset"] = False
+            st.success(f"Paper account restored to {restored:.2f} USDT. Bot is paused.")
+            st.rerun()
+        except RuntimeError as exc:
+            st.error(str(exc))
+    else:
+        st.session_state["confirm_account_reset"] = True
+        st.warning(
+            "Click RESET ACCOUNT TO INITIAL BALANCE again to confirm. "
+            "Open positions will be discarded; wallet and P&L statistics reset. "
+            "Trade history and strategy signals will be kept."
+        )
+
 state = engine.get_bot_state()
 st.subheader(("🟢 " if state == "RUNNING" else "🟠 " if state == "PAUSED" else "🔴 ")
              + f"BOT {state} · PAPER MODE")
@@ -197,7 +218,6 @@ def live_monitor():
             st.dataframe(events[["Time (UTC)","level","message"]], use_container_width=True, hide_index=True)
 
     st.caption(f"Risk settings: {settings.leverage}× leverage · TP {tp_value:.8f} USDT · "
-               f"SL {sl_value:.8f} USDT · max {settings.max_positions} positions · "
-               f"daily realized-loss guard {settings.daily_loss_limit_usdt:.2f} USDT (UTC).")
+               f"SL {sl_value:.8f} USDT · max {settings.max_positions} positions.")
 
 live_monitor()

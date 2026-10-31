@@ -20,7 +20,6 @@ LEVERAGE = int(os.getenv("LEVERAGE", "10"))
 FEE = float(os.getenv("TAKER_FEE_RATE", "0.0005"))
 TP = float(os.getenv("TAKE_PROFIT_USDT", "10"))
 SL = float(os.getenv("STOP_LOSS_USDT", "5"))
-DAILY_LOSS_LIMIT = float(os.getenv("DAILY_LOSS_LIMIT_USDT", "50"))
 EXCLUDE_TOP_VOLUME = int(os.getenv("EXCLUDE_TOP_VOLUME", "50"))
 MAX_UNIVERSE_SYMBOLS = int(os.getenv("MAX_UNIVERSE_SYMBOLS", "200"))
 INTERVAL = os.getenv("STRATEGY_INTERVAL", "15m")
@@ -59,7 +58,6 @@ def main() -> None:
         taker_fee_rate=FEE,
         take_profit_usdt=TP,
         stop_loss_usdt=SL,
-        daily_loss_limit_usdt=DAILY_LOSS_LIMIT,
     )
     engine = PaperEngine(DB_PATH, settings)
 

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import os
 import threading
-from datetime import datetime, timezone
 from math import isfinite
 import time
 from typing import Iterable
@@ -239,16 +238,6 @@ class FuturesPaperRuntime:
                 self.engine.record_event(self.last_error, "WARNING")
         self._last_funding_poll = now
 
-    def _daily_realized_loss_reached(self) -> bool:
-        limit = self.engine.settings.daily_loss_limit_usdt
-        if limit <= 0:
-            return False
-        now = datetime.now(timezone.utc)
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        start_ms = int(midnight.timestamp() * 1000)
-        realized_today = self.engine.realized_pnl_since(start_ms)
-        return realized_today <= -limit
-
     def _manage_positions(self) -> None:
         tp, sl = self.engine.refresh_risk_settings()
         self.strategy.settings = HAFlipsSettings(
@@ -322,14 +311,6 @@ class FuturesPaperRuntime:
                         print(self.last_error)
                 elif state in ("RUNNING", "PAUSED"):
                     try:
-                        if state == "RUNNING" and self._daily_realized_loss_reached():
-                            self.engine.set_bot_state("PAUSED")
-                            self.last_error = (
-                                "Daily realized-loss limit reached; new entries paused "
-                                "until manually resumed."
-                            )
-                            self.engine.record_event(self.last_error, "WARNING")
-                            print(self.last_error)
                         self._manage_positions()
                     except (requests.RequestException, ValueError, KeyError) as exc:
                         self.last_error = str(exc)
