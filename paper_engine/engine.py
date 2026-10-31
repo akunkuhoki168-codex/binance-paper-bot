@@ -211,8 +211,11 @@ class PaperEngine:
             self._db.execute("BEGIN IMMEDIATE")
             try:
                 now = int(time.time() * 1000)
+                # STOPPING tells the runtime process to exit its main loop.
+                # The reset has already removed every open position, so the
+                # runtime can verify there is nothing left to close and exit.
                 self._db.execute(
-                    "UPDATE bot_control SET state='PAUSED', updated_at=? WHERE id=1",
+                    "UPDATE bot_control SET state='STOPPING', updated_at=? WHERE id=1",
                     (now,),
                 )
                 for table in (
