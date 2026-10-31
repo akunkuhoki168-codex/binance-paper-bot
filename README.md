@@ -2,15 +2,24 @@
 
 SQLite-backed multi-position paper trader for Binance USDⓈ-M Futures.
 
-**PAPER TRADING ONLY.** No API keys, signed requests, or live orders. The runtime uses public market-data endpoints and public WebSocket streams only.
+**PAPER TRADING ONLY.** No Binance API keys, signed requests, or live orders. Binance data is read from public REST endpoints and public WebSocket streams; every order is simulated locally.
+
+## Market universe
+
+At startup, the bot reads CoinMarketCap market-cap rankings and intersects them with Binance USDⓈ-M exchange metadata. It monitors only active **USDT-quoted perpetual contracts** whose CoinMarketCap rank is **#51 or lower in rank position** (the top 50 are excluded).
+
+The universe is refreshed each time the bot starts. If CoinMarketCap rankings cannot be loaded, the bot stops instead of falling back to BTC, ETH, or a fixed list. The default maximum is 200 matching contracts, ordered by market-cap rank.
+
+A CoinMarketCap API key is required for rankings. Create a key in your CoinMarketCap account, then add it as `CMC_API_KEY` in your Codespace secret or local `.env` file. This key is used only with CoinMarketCap; **do not add Binance API keys**.
 
 ## Architecture
 
 - `paper_engine/engine.py` — persistent multi-position LONG/SHORT isolated-margin execution simulator.
-- `market_data/klines.py` and `market_data/websocket.py` — public REST candle bootstrap, completed-candle cache, and reconnecting WebSocket feed.
+- `market_data/universe.py` — CoinMarketCap market-cap ranking provider.
+- `market_data/klines.py` and `market_data/websocket.py` — public Binance candle bootstrap, completed-candle cache, and reconnecting WebSocket feed.
 - `strategies/HA_flips.py` — Heikin-Ashi colour-flip entries and net-PnL TP/SL decisions.
 - `runtime.py` — coordinates market data, strategy decisions, paper execution, mark-price monitoring, and graceful STOP.
-- `main.py` — starts the runtime and restores SQLite state.
+- `main.py` — selects the rank-51+ universe and starts the runtime.
 - `dashboard.py` — Streamlit monitoring and SQLite controls.
 
 ## Quick start
@@ -23,7 +32,7 @@ Activate the environment:
 
 ```bash
 # Windows
-.venv\Scripts\activate
+.venv\\Scripts\\activate
 
 # Linux/macOS
 source .venv/bin/activate
@@ -48,12 +57,13 @@ The runtime must remain running in its own terminal. The dashboard does not spaw
 
 ## Configuration
 
-Optional environment variables:
-
 | Variable | Default | Purpose |
 |---|---:|---|
+| `CMC_API_KEY` | required | CoinMarketCap read-only market-cap ranking API key |
+| `CMC_RANK_START` | `51` | First eligible market-cap rank; keep at 51 to exclude the top 50 |
+| `CMC_RANK_LIMIT` | `5000` | Number of ranking positions requested from CoinMarketCap |
+| `MAX_UNIVERSE_SYMBOLS` | `200` | Maximum matching Binance USDT perpetual contracts monitored |
 | `DB_PATH` | `data/paper_engine.sqlite3` | Shared SQLite database |
-| `FUTURES_SYMBOLS` | `BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT` | Symbols to monitor |
 | `STRATEGY_INTERVAL` | `15m` | HA interval: 15m, 1h, or 4h |
 | `SEED_CANDLES` | `120` | Completed candles fetched per symbol at startup |
 | `MARK_POLL_SECONDS` | `3` | Public mark-price refresh interval |
