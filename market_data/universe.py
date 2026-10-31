@@ -29,7 +29,7 @@ class CoinMarketCapUniverse:
         self.session = session or requests.Session()
         self.timeout = timeout
 
-    def ranked_base_symbols(self, start_rank: int = 51, limit: int = 5000) -> list[str]:
+    def ranked_base_symbols(self, start_rank: int = 51, limit: int = 2000) -> list[str]:
         """Return unique base-asset symbols from the requested market-cap ranks."""
         if not isinstance(start_rank, int) or not 1 <= start_rank <= 5000:
             raise ValueError("start_rank must be between 1 and 5000")
