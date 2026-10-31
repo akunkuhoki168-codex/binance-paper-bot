@@ -14,7 +14,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import requests
 
 REST_BASE = "https://fapi.binance.com"
-WEBSOCKET_BASE = "wss://fstream.binance.com/stream?streams="
+WEBSOCKET_BASE = "wss://fstream.binance.com/market/stream?streams="
 SUPPORTED_INTERVALS = ("15m", "1h", "4h")
 
 
