@@ -93,3 +93,56 @@ class KlineWebSocket:
                 self._app = None
             if not self._stop.is_set():
                 self._stop.wait(self.reconnect_seconds)
+
+
+class MarkPriceWebSocket:
+    """Reconnectable public all-symbol mark-price WebSocket feed."""
+
+    def __init__(self, symbols: Iterable[str], on_prices: Callable[[dict[str, float]], None]):
+        self.symbols = {str(symbol).upper() for symbol in symbols}
+        if not self.symbols:
+            raise ValueError("at least one symbol is required")
+        self.on_prices = on_prices
+        self._stop = threading.Event()
+        self._app = None
+
+    @property
+    def url(self) -> str:
+        return WEBSOCKET_BASE + "!markPrice@arr@1s"
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._app is not None:
+            self._app.close()
+
+    def _on_message(self, _ws, message: str) -> None:
+        try:
+            packet = json.loads(message)
+            rows = packet.get("data", packet)
+            if not isinstance(rows, list):
+                return
+            prices = {}
+            for row in rows:
+                symbol = str(row.get("s", "")).upper()
+                if symbol in self.symbols:
+                    price = float(row.get("p", 0))
+                    if price > 0:
+                        prices[symbol] = price
+            if prices:
+                self.on_prices(prices)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return
+
+    def run_forever(self) -> None:
+        import websocket
+        while not self._stop.is_set():
+            app = websocket.WebSocketApp(self.url, on_message=self._on_message)
+            self._app = app
+            try:
+                app.run_forever(ping_interval=20, ping_timeout=10)
+            except Exception:
+                pass
+            finally:
+                self._app = None
+            if not self._stop.is_set():
+                self._stop.wait(3.0)
