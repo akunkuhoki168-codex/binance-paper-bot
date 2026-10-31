@@ -63,6 +63,7 @@ Optional environment variables:
 | `TAKER_FEE_RATE` | `0.0005` | Simulated taker fee |
 | `TAKE_PROFIT_USDT` | `10` | Net PnL take-profit threshold |
 | `STOP_LOSS_USDT` | `5` | Net PnL stop-loss threshold |
+| `DAILY_LOSS_LIMIT_USDT` | `50` | Pause new entries after this much net realized loss in one UTC day; set to `0` to disable |
 
 ## Dashboard controls
 
@@ -74,7 +75,9 @@ Optional environment variables:
 
 ## Persistence and safety
 
-Positions, wallet, trade history, fees, funding, cooldowns, and bot state are stored in SQLite. Restarting the process restores persisted positions.
+Positions, wallet, trade history, fees, funding, cooldowns, and bot state are stored in SQLite. Restarting the process restores persisted positions. Settled funding-rate events are polled from Binance's public funding-history endpoint and applied once per funding timestamp.
+
+The daily loss guard sums net realized PnL from closed trades since 00:00 UTC. When the configured limit is reached, the runtime pauses new entries while continuing to manage open positions. It does **not** include unrealized losses, so it is a limited circuit breaker rather than a complete account-equity drawdown control.
 
 This is a paper simulator: fills, slippage, funding timing, liquidation, and exchange execution are not exact reproductions of Binance.
 
