@@ -170,7 +170,7 @@ class FuturesPaperRuntime:
     def _sync_funding(self) -> None:
         """Apply newly settled public funding events once per open position."""
         now = time.monotonic()
-        if now - self._last_funding_poll < self.funding_poll_seconds:
+        if self._last_funding_poll and now - self._last_funding_poll < self.funding_poll_seconds:
             return
         for symbol in list(self.engine.snapshot()["positions"]):
             start_time = self.engine.last_funding_time(symbol)
