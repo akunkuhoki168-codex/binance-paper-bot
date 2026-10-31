@@ -17,19 +17,34 @@ SQLite-backed multi-position paper trader for Binance USDⓈ-M Futures.
 
 ```bash
 python -m venv .venv
-# Windows: .venv\\Scripts\\activate
-# Linux/macOS: source .venv/bin/activate
+```
+
+Activate the environment:
+
+```bash
+# Windows
+.venv\Scripts\activate
+
+# Linux/macOS
+source .venv/bin/activate
+```
+
+Install dependencies and start the bot:
+
+```bash
 pip install -r requirements.txt
 python main.py
 ```
 
-In a second terminal:
+In a second terminal, start the dashboard:
 
 ```bash
 streamlit run dashboard.py
 ```
 
-Open http://localhost:8501. The runtime must remain running in its own terminal. The dashboard does not spawn or restart operating-system processes.
+Open http://localhost:8501.
+
+The runtime must remain running in its own terminal. The dashboard does not spawn or restart operating-system processes.
 
 ## Configuration
 
@@ -59,4 +74,8 @@ Optional environment variables:
 
 ## Persistence and safety
 
-Positions, wallet, trade history, fees, funding, cooldowns, and bot state are stored in SQLite. Restarting the process restores persisted positions. This is a paper simulator: fills, slippage, funding timing, liquidation, and exchange execution are not exact reproductions of Binance.
+Positions, wallet, trade history, fees, funding, cooldowns, and bot state are stored in SQLite. Restarting the process restores persisted positions.
+
+This is a paper simulator: fills, slippage, funding timing, liquidation, and exchange execution are not exact reproductions of Binance.
+
+Never commit API keys, secrets, or `.env` files. Live trading is not implemented.
