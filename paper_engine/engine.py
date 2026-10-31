@@ -228,10 +228,11 @@ class PaperEngine:
 
     def is_in_cooldown(self, symbol: str, now_ms: int | None = None) -> bool:
         now_ms = int(time.time() * 1000) if now_ms is None else now_ms
-        row = self._db.execute(
-            "SELECT until_ms FROM paper_cooldowns WHERE symbol=?", (symbol.upper(),)
-        ).fetchone()
-        return bool(row and row["until_ms"] > now_ms)
+        with self._lock:
+            row = self._db.execute(
+                "SELECT until_ms FROM paper_cooldowns WHERE symbol=?", (symbol.upper(),)
+            ).fetchone()
+            return bool(row and row["until_ms"] > now_ms)
 
     def open_position(self, symbol: str, side: Side, price: float,
                       now_ms: int | None = None) -> PaperPosition:
@@ -297,7 +298,10 @@ class PaperEngine:
             raise ValueError("funding_time_ms must be a non-negative integer")
         with self._lock:
             p = self._positions.get(symbol)
-            if p is None or funding_time_ms < p.opened_at:
+            # Do not charge a position for a settlement at its entry
+            # timestamp: millisecond ordering cannot prove it was open before
+            # the funding instant. Only strictly later settlements apply.
+            if p is None or funding_time_ms <= p.opened_at:
                 return 0.0
             payment = -p.quantity * mark_price * funding_rate
             if p.side == "SHORT":
