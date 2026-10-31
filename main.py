@@ -60,6 +60,11 @@ def main() -> None:
         stop_loss_usdt=SL,
     )
     engine = PaperEngine(DB_PATH, settings)
+    # A previous reset/stop may have left STOPPING in SQLite if no runtime
+    # process was alive to consume it. A fresh manual launch clears that
+    # stale shutdown request; the dashboard START / RESUME control starts it.
+    if engine.get_bot_state() == "STOPPING":
+        engine.set_bot_state("IDLE")
 
     def _handle_signal(*_args: object) -> None:
         print("\nShutdown requested; asking runtime to close positions safely.")
