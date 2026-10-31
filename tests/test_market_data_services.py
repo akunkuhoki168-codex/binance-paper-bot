@@ -21,7 +21,7 @@ class UniverseProviderTests(unittest.TestCase):
         ] + [{"symbol": "BTCUSDT", "quoteVolume": "2000"}]
         self.assertEqual(
             ranked_usdt_perpetuals_by_quote_volume(exchange, tickers, 50, 10),
-            ["COIN51USDT", "COIN52USDT", "COIN53USDT", "COIN54USDT", "COIN55USDT"],
+            ["COIN50USDT", "COIN51USDT", "COIN52USDT", "COIN53USDT", "COIN54USDT", "COIN55USDT"],
         )
 
     def test_only_active_usdt_perpetuals_are_ranked(self):
