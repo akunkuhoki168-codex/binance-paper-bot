@@ -28,6 +28,7 @@ class PaperEngineSettings:
     take_profit_usdt: float = 10.0
     stop_loss_usdt: float = 5.0
     cooldown_minutes: int = 15
+    daily_loss_limit_usdt: float = 50.0
 
     def __post_init__(self):
         if not isfinite(self.initial_capital) or self.initial_capital <= 0:
@@ -46,6 +47,8 @@ class PaperEngineSettings:
             raise ValueError("stop_loss_usdt must be positive")
         if not isinstance(self.cooldown_minutes, int) or self.cooldown_minutes < 0:
             raise ValueError("cooldown_minutes must be non-negative")
+        if not isfinite(self.daily_loss_limit_usdt) or self.daily_loss_limit_usdt < 0:
+            raise ValueError("daily_loss_limit_usdt must be finite and non-negative")
 
 
 @dataclass
@@ -383,6 +386,18 @@ class PaperEngine:
                     return "STOP_LOSS"
 
             return None
+
+    def realized_pnl_since(self, start_time_ms: int) -> float:
+        """Return net realized PnL from closed paper trades since a timestamp."""
+        if not isinstance(start_time_ms, int) or start_time_ms < 0:
+            raise ValueError("start_time_ms must be a non-negative integer")
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COALESCE(SUM(net_pnl), 0) AS total FROM paper_trades "
+                "WHERE action='CLOSE' AND created_at >= ?",
+                (start_time_ms,),
+            ).fetchone()
+            return float(row["total"])
 
     def snapshot(self, marks: dict[str, float] | None = None) -> dict:
         with self._lock:
