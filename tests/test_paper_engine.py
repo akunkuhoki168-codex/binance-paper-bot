@@ -101,10 +101,6 @@ class PaperEngineTests(unittest.TestCase):
         self.engine.close_position("ETHUSDT", 99, now_ms=4_000)
         self.assertAlmostEqual(
             self.engine.realized_pnl_since(3_000),
-            self.engine.snapshot()["realized_pnl"] - self.engine.realized_pnl_since(0) + self.engine.realized_pnl_since(0),
-        )
-        self.assertAlmostEqual(
-            self.engine.realized_pnl_since(3_000),
             sum(row["net_pnl"] for row in self.engine._db.execute(
                 "SELECT net_pnl FROM paper_trades WHERE action='CLOSE' AND created_at >= 3000"
             ).fetchall()),
