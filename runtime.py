@@ -6,12 +6,14 @@ from __future__ import annotations
 
 import os
 import threading
+from datetime import datetime, timezone
 from math import isfinite
 import time
 from typing import Iterable
 
 import requests
 
+from market_data.funding import BinanceFundingClient
 from market_data.klines import (
     BinanceFuturesKlineClient,
     FuturesCandle,
@@ -52,6 +54,9 @@ class FuturesPaperRuntime:
         self.seed_limit = seed_limit
         self.mark_poll_seconds = mark_poll_seconds
         self.client = BinanceFuturesKlineClient()
+        self.funding_client = BinanceFundingClient()
+        self.funding_poll_seconds = 60.0
+        self._last_funding_poll = 0.0
         self.data = KlineDataManager(max_candles=max(seed_limit, 600))
         self.strategy = HAFlipsStrategy(
             HAFlipsSettings(
@@ -162,7 +167,42 @@ class FuturesPaperRuntime:
             except ValueError as exc:
                 self.last_error = f"{candle.symbol}: {exc}"
 
+    def _sync_funding(self) -> None:
+        """Apply newly settled public funding events once per open position."""
+        now = time.monotonic()
+        if now - self._last_funding_poll < self.funding_poll_seconds:
+            return
+        for symbol in list(self.engine.snapshot()["positions"]):
+            start_time = self.engine.last_funding_time(symbol)
+            if start_time is None:
+                continue
+            events = self.funding_client.funding_events(symbol, start_time)
+            for event in events:
+                payment = self.engine.apply_funding(
+                    symbol,
+                    event.funding_rate,
+                    event.mark_price,
+                    funding_time_ms=event.funding_time,
+                )
+                if payment:
+                    print(
+                        f" PAPER FUNDING {symbol}: {payment:+.6f} USDT "
+                        f"at rate {event.funding_rate:+.6%}"
+                    )
+        self._last_funding_poll = now
+
+    def _daily_realized_loss_reached(self) -> bool:
+        limit = self.engine.settings.daily_loss_limit_usdt
+        if limit <= 0:
+            return False
+        now = datetime.now(timezone.utc)
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_ms = int(midnight.timestamp() * 1000)
+        realized_today = self.engine.realized_pnl_since(start_ms)
+        return realized_today <= -limit
+
     def _manage_positions(self) -> None:
+        self._sync_funding()
         marks = self.refresh_marks()
         positions = self.engine.snapshot()["positions"]
         for symbol, position in positions.items():
@@ -219,6 +259,13 @@ class FuturesPaperRuntime:
                         print(self.last_error)
                 elif state in ("RUNNING", "PAUSED"):
                     try:
+                        if state == "RUNNING" and self._daily_realized_loss_reached():
+                            self.engine.set_bot_state("PAUSED")
+                            self.last_error = (
+                                "Daily realized-loss limit reached; new entries paused "
+                                "until manually resumed."
+                            )
+                            print(self.last_error)
                         self._manage_positions()
                     except (requests.RequestException, ValueError, KeyError) as exc:
                         self.last_error = str(exc)
