@@ -123,6 +123,18 @@ class PaperEngine:
                 state TEXT NOT NULL DEFAULT 'IDLE',
                 updated_at INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS strategy_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL, action TEXT NOT NULL, side TEXT,
+                reason TEXT NOT NULL, candle_time INTEGER NOT NULL, created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS runtime_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                level TEXT NOT NULL, message TEXT NOT NULL, created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS market_prices (
+                symbol TEXT PRIMARY KEY, mark_price REAL NOT NULL, updated_at INTEGER NOT NULL
+            );
         """)
         self._db.execute(
             "INSERT OR IGNORE INTO paper_account(id,wallet) VALUES(1,?)",
@@ -398,6 +410,30 @@ class PaperEngine:
                 (start_time_ms,),
             ).fetchone()
             return float(row["total"])
+
+    def record_signal(self, symbol: str, action: str, side: str | None,
+                      reason: str, candle_time: int) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO strategy_signals(symbol,action,side,reason,candle_time,created_at) VALUES(?,?,?,?,?,?)",
+                (symbol.upper(), action, side, reason, candle_time, int(time.time() * 1000)),
+            )
+
+    def record_event(self, message: str, level: str = "INFO") -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO runtime_events(level,message,created_at) VALUES(?,?,?)",
+                (level.upper(), str(message)[:1000], int(time.time() * 1000)),
+            )
+
+    def update_market_prices(self, marks: dict[str, float]) -> None:
+        now = int(time.time() * 1000)
+        with self._lock, self._db:
+            self._db.executemany(
+                "INSERT INTO market_prices(symbol,mark_price,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(symbol) DO UPDATE SET mark_price=excluded.mark_price, updated_at=excluded.updated_at",
+                [(s.upper(), p, now) for s, p in marks.items() if isfinite(p) and p > 0],
+            )
 
     def snapshot(self, marks: dict[str, float] | None = None) -> dict:
         with self._lock:
