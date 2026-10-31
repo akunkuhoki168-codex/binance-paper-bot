@@ -250,6 +250,13 @@ class FuturesPaperRuntime:
         return realized_today <= -limit
 
     def _manage_positions(self) -> None:
+        tp, sl = self.engine.refresh_risk_settings()
+        self.strategy.settings = HAFlipsSettings(
+            take_profit_usdt=tp,
+            stop_loss_usdt=sl,
+            timeframe=self.interval,
+            cooldown_minutes=self.engine.settings.cooldown_minutes,
+        )
         self._sync_funding()
         marks = self.current_fresh_marks()
         positions = self.engine.snapshot()["positions"]
