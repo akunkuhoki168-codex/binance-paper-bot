@@ -37,6 +37,52 @@ def get_engine(db_path: str, engine_settings: PaperEngineSettings) -> PaperEngin
 
 engine = get_engine(DB, settings)
 
+# Risk controls are stored in the same SQLite database used by the bot process.
+with sqlite3.connect(DB) as risk_db:
+    risk_db.execute(
+        "CREATE TABLE IF NOT EXISTS risk_settings ("
+        "id INTEGER PRIMARY KEY CHECK(id=1), "
+        "take_profit_usdt REAL NOT NULL, stop_loss_usdt REAL NOT NULL, "
+        "updated_at INTEGER NOT NULL)"
+    )
+    risk_db.execute(
+        "INSERT OR IGNORE INTO risk_settings(id,take_profit_usdt,stop_loss_usdt,updated_at) "
+        "VALUES(1,?,?,?)",
+        (settings.take_profit_usdt, settings.stop_loss_usdt, int(pd.Timestamp.utcnow().timestamp() * 1000)),
+    )
+    saved_risk = risk_db.execute(
+        "SELECT take_profit_usdt, stop_loss_usdt FROM risk_settings WHERE id=1"
+    ).fetchone()
+
+st.subheader("Risk Management · Paper Trading")
+with st.form("risk_management_form"):
+    tp_options = [5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200]
+    sl_options = [2, 3, 5, 7.5, 10, 15, 20, 25, 30, 40, 50, 75, 100]
+    current_tp = float(saved_risk[0])
+    current_sl = float(saved_risk[1])
+    tp_choice = st.selectbox(
+        "Take Profit (USDT per position)",
+        tp_options,
+        index=tp_options.index(current_tp) if current_tp in tp_options else 1,
+    )
+    sl_choice = st.selectbox(
+        "Stop Loss (USDT per position)",
+        sl_options,
+        index=sl_options.index(current_sl) if current_sl in sl_options else 2,
+    )
+    rr = tp_choice / sl_choice
+    st.metric("Risk / Reward", f"1 : {rr:.2f}")
+    st.caption(f"Potential target: +{tp_choice:.2f} USDT · Risk threshold: -{sl_choice:.2f} USDT per position. Values are net PnL thresholds.")
+    save_risk = st.form_submit_button("SAVE TP / SL SETTINGS", use_container_width=True)
+    if save_risk:
+        with sqlite3.connect(DB) as risk_db:
+            risk_db.execute(
+                "UPDATE risk_settings SET take_profit_usdt=?, stop_loss_usdt=?, updated_at=? WHERE id=1",
+                (float(tp_choice), float(sl_choice), int(pd.Timestamp.utcnow().timestamp() * 1000)),
+            )
+        st.success("TP / SL saved. The running paper bot will apply the new values on its next position-management cycle.")
+        st.rerun()
+
 controls = st.columns(4)
 if controls[0].button("START / RESUME", use_container_width=True):
     engine.set_bot_state("RUNNING")
