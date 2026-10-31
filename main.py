@@ -1,8 +1,4 @@
-"""Binance USDⓈ-M Futures paper-trading bot entry point.
-
-Uses CoinMarketCap rankings plus Binance public Futures metadata to build an
-altcoin-only universe. Execution remains local paper trading only.
-"""
+"""Binance USDⓈ-M Futures paper-trading bot entry point."""
 from __future__ import annotations
 
 import os
@@ -10,8 +6,8 @@ import signal
 
 from dotenv import load_dotenv
 
-from market_data.klines import BinanceFuturesKlineClient, eligible_usdt_perpetuals
-from market_data.universe import CoinMarketCapUniverse
+from market_data.klines import BinanceFuturesKlineClient
+from market_data.universe import select_volume_ranked_symbols
 from paper_engine.engine import PaperEngine, PaperEngineSettings
 from runtime import FuturesPaperRuntime
 
@@ -25,49 +21,37 @@ FEE = float(os.getenv("TAKER_FEE_RATE", "0.0005"))
 TP = float(os.getenv("TAKE_PROFIT_USDT", "10"))
 SL = float(os.getenv("STOP_LOSS_USDT", "5"))
 DAILY_LOSS_LIMIT = float(os.getenv("DAILY_LOSS_LIMIT_USDT", "50"))
-CMC_RANK_START = int(os.getenv("CMC_RANK_START", "51"))
-CMC_RANK_LIMIT = int(os.getenv("CMC_RANK_LIMIT", "2000"))
+EXCLUDE_TOP_VOLUME = int(os.getenv("EXCLUDE_TOP_VOLUME", "50"))
 MAX_UNIVERSE_SYMBOLS = int(os.getenv("MAX_UNIVERSE_SYMBOLS", "200"))
 INTERVAL = os.getenv("STRATEGY_INTERVAL", "15m")
 
 
 def select_futures_universe() -> tuple[str, ...]:
-    """Select ranked #51+ assets that have a live Binance USDT perpetual."""
-    provider = CoinMarketCapUniverse()
-    ranked_bases = provider.ranked_base_symbols(
-        start_rank=CMC_RANK_START,
-        limit=CMC_RANK_LIMIT,
-    )
-    exchange_info = BinanceFuturesKlineClient().exchange_info()
-    symbols = eligible_usdt_perpetuals(
-        ranked_bases,
-        exchange_info,
+    """Select active USDT perpetuals after excluding the highest-volume N."""
+    client = BinanceFuturesKlineClient()
+    symbols = select_volume_ranked_symbols(
+        client.exchange_info(),
+        client.ticker_24hr(),
+        exclude_top=EXCLUDE_TOP_VOLUME,
         limit=MAX_UNIVERSE_SYMBOLS,
     )
     if not symbols:
         raise RuntimeError(
-            "No Binance USDT perpetual contracts matched CoinMarketCap ranks "
-            f"#{CMC_RANK_START}–#{CMC_RANK_START + CMC_RANK_LIMIT - 1}. "
-            "Check the CoinMarketCap API plan and universe settings."
+            f"No USDT perpetuals remain after excluding the top {EXCLUDE_TOP_VOLUME} by volume."
         )
     return tuple(symbols)
 
 
 def main() -> None:
-    """Start the USDⓈ-M Futures paper-trading runtime."""
     print("BINANCE USDⓈ-M FUTURES PAPER BOT")
     print("PAPER TRADING ONLY — public Binance data; simulated orders only")
     print(f"Database: {DB_PATH}")
-
-    # Fail closed: never fall back to BTC/ETH or a fixed symbol list if rankings
-    # are unavailable. This guarantees the top-50 exclusion is not bypassed.
     symbols = select_futures_universe()
     print(
-        f"CoinMarketCap ranks #{CMC_RANK_START}+ | "
-        f"{len(symbols)} eligible Binance USDT perpetuals"
+        f"Excluded top {EXCLUDE_TOP_VOLUME} by 24h quote volume; "
+        f"selected {len(symbols)} USDT perpetuals."
     )
     print(f"Symbols: {', '.join(symbols)} | HA timeframe: {INTERVAL}")
-
     settings = PaperEngineSettings(
         initial_capital=STARTING,
         max_positions=MAX_POS,
@@ -85,7 +69,6 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
-
     runtime = None
     try:
         runtime = FuturesPaperRuntime(
