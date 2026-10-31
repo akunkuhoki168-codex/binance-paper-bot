@@ -28,7 +28,6 @@ class PaperEngineSettings:
     take_profit_usdt: float = 10.0
     stop_loss_usdt: float = 5.0
     cooldown_minutes: int = 15
-    daily_loss_limit_usdt: float = 50.0
 
     def __post_init__(self):
         if not isfinite(self.initial_capital) or self.initial_capital <= 0:
@@ -47,8 +46,6 @@ class PaperEngineSettings:
             raise ValueError("stop_loss_usdt must be positive")
         if not isinstance(self.cooldown_minutes, int) or self.cooldown_minutes < 0:
             raise ValueError("cooldown_minutes must be non-negative")
-        if not isfinite(self.daily_loss_limit_usdt) or self.daily_loss_limit_usdt < 0:
-            raise ValueError("daily_loss_limit_usdt must be finite and non-negative")
 
 
 @dataclass
@@ -203,6 +200,41 @@ class PaperEngine:
                 (state, int(time.time() * 1000)),
             )
             self._db.commit()
+
+    def reset_account(self) -> float:
+        """Restore the paper wallet and clear live account state, preserving history.
+
+        The bot is left PAUSED so trading resumes only after an explicit user action.
+        """
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                state = self._db.execute(
+                    "SELECT state FROM bot_control WHERE id=1"
+                ).fetchone()
+                if state and state["state"] == "STOPPING":
+                    raise RuntimeError(
+                        "The bot is stopping. Wait until it reaches IDLE, then reset."
+                    )
+                now = int(time.time() * 1000)
+                self._db.execute(
+                    "UPDATE bot_control SET state='PAUSED', updated_at=? WHERE id=1",
+                    (now,),
+                )
+                self._db.execute("DELETE FROM paper_positions")
+                self._db.execute("DELETE FROM paper_cooldowns")
+                self._db.execute("DELETE FROM paper_funding_events")
+                self._db.execute(
+                    "UPDATE paper_account SET wallet=?, realized_pnl=0, "
+                    "fees_paid=0, funding_net=0 WHERE id=1",
+                    (self.settings.initial_capital,),
+                )
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+                raise
+            self._positions.clear()
+            return float(self.settings.initial_capital)
 
     def force_close_all(self, marks: dict[str, float]) -> dict[str, str]:
         """Close every open position at the supplied mark prices.
