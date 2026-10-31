@@ -67,6 +67,17 @@ class RuntimeControlTests(unittest.TestCase):
         position = self.engine.snapshot()["positions"]["BTCUSDT"]
         self.assertEqual(position["entry_price"], 105.0)
 
+    def test_closed_candle_decisions_are_persisted(self):
+        self.engine.set_bot_state("RUNNING")
+        decision = SimpleNamespace(action="HOLD", side=None, reason="No HA flip")
+        candle = SimpleNamespace(symbol="BTCUSDT", interval="15m", close=100, open_time=1234)
+        with patch.object(self.runtime.strategy, "on_closed_candles", return_value=decision):
+            self.runtime._on_closed_candle(candle)
+        import sqlite3
+        with sqlite3.connect(self.db) as db:
+            row = db.execute("SELECT symbol,action,reason,candle_time FROM strategy_signals").fetchone()
+        self.assertEqual(row, ("BTCUSDT", "HOLD", "No HA flip", 1234))
+
     def test_funding_events_are_applied_and_duplicate_poll_is_avoided(self):
         from market_data.funding import FundingEvent
         self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
