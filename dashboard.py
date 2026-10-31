@@ -55,33 +55,44 @@ with sqlite3.connect(DB) as risk_db:
     ).fetchone()
 
 st.subheader("Risk Management · Paper Trading")
-with st.form("risk_management_form"):
-    tp_options = [5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200]
-    sl_options = [2, 3, 5, 7.5, 10, 15, 20, 25, 30, 40, 50, 75, 100]
-    current_tp = float(saved_risk[0])
-    current_sl = float(saved_risk[1])
-    tp_choice = st.selectbox(
+current_tp = float(saved_risk[0])
+current_sl = float(saved_risk[1])
+risk_cols = st.columns(2)
+with risk_cols[0]:
+    tp_value = st.number_input(
         "Take Profit (USDT per position)",
-        tp_options,
-        index=tp_options.index(current_tp) if current_tp in tp_options else 1,
+        min_value=0.00000001,
+        value=current_tp,
+        step=0.1,
+        format="%.8f",
+        key="risk_take_profit",
+        help="Enter any positive amount, including 0.10 USDT.",
     )
-    sl_choice = st.selectbox(
+with risk_cols[1]:
+    sl_value = st.number_input(
         "Stop Loss (USDT per position)",
-        sl_options,
-        index=sl_options.index(current_sl) if current_sl in sl_options else 2,
+        min_value=0.00000001,
+        value=current_sl,
+        step=0.1,
+        format="%.8f",
+        key="risk_stop_loss",
+        help="Enter any positive amount, including 0.10 USDT.",
     )
-    rr = tp_choice / sl_choice
-    st.metric("Risk / Reward", f"1 : {rr:.2f}")
-    st.caption(f"Potential target: +{tp_choice:.2f} USDT · Risk threshold: -{sl_choice:.2f} USDT per position. Values are net PnL thresholds.")
-    save_risk = st.form_submit_button("SAVE TP / SL SETTINGS", use_container_width=True)
-    if save_risk:
-        with sqlite3.connect(DB) as risk_db:
-            risk_db.execute(
-                "UPDATE risk_settings SET take_profit_usdt=?, stop_loss_usdt=?, updated_at=? WHERE id=1",
-                (float(tp_choice), float(sl_choice), int(pd.Timestamp.utcnow().timestamp() * 1000)),
-            )
-        st.success("TP / SL saved. The running paper bot will apply the new values on its next position-management cycle.")
-        st.rerun()
+
+rr = tp_value / sl_value
+st.metric("Risk / Reward", f"1 : {rr:.2f}")
+st.caption(
+    f"Potential target: +{tp_value:.8f} USDT · Risk threshold: -{sl_value:.8f} USDT per position. "
+    "Values are net PnL thresholds after estimated fees and funding."
+)
+if st.button("SAVE TP / SL SETTINGS", use_container_width=True):
+    with sqlite3.connect(DB) as risk_db:
+        risk_db.execute(
+            "UPDATE risk_settings SET take_profit_usdt=?, stop_loss_usdt=?, updated_at=? WHERE id=1",
+            (float(tp_value), float(sl_value), int(pd.Timestamp.utcnow().timestamp() * 1000)),
+        )
+    st.success("TP / SL saved. The running paper bot will apply the new values on its next position-management cycle.")
+    st.rerun()
 
 controls = st.columns(4)
 if controls[0].button("START / RESUME", use_container_width=True):
@@ -185,8 +196,8 @@ def live_monitor():
             events["Time (UTC)"] = pd.to_datetime(events["created_at"], unit="ms", utc=True).dt.strftime("%Y-%m-%d %H:%M:%S")
             st.dataframe(events[["Time (UTC)","level","message"]], use_container_width=True, hide_index=True)
 
-    st.caption(f"Risk settings: {settings.leverage}× leverage · TP {settings.take_profit_usdt:.2f} USDT · "
-               f"SL {settings.stop_loss_usdt:.2f} USDT · max {settings.max_positions} positions · "
+    st.caption(f"Risk settings: {settings.leverage}× leverage · TP {tp_value:.8f} USDT · "
+               f"SL {sl_value:.8f} USDT · max {settings.max_positions} positions · "
                f"daily realized-loss guard {settings.daily_loss_limit_usdt:.2f} USDT (UTC).")
 
 live_monitor()
