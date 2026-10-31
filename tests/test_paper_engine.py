@@ -59,6 +59,22 @@ class PaperEngineTests(unittest.TestCase):
         self.engine.open_position("ETHUSDT", "SHORT", 100, now_ms=1_000)
         self.assertAlmostEqual(self.engine.apply_funding("ETHUSDT", 0.001, 100, funding_time_ms=2_000), 0.3992015968063872)
 
+    def test_funding_at_or_before_position_entry_is_ignored(self):
+        self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=2_000)
+        self.assertEqual(
+            self.engine.apply_funding("BTCUSDT", 0.001, 100, funding_time_ms=2_000),
+            0.0,
+        )
+        self.assertEqual(
+            self.engine.apply_funding("BTCUSDT", 0.001, 100, funding_time_ms=1_999),
+            0.0,
+        )
+        self.assertEqual(self.engine.snapshot()["funding_net"], 0.0)
+        event_count = self.engine._db.execute(
+            "SELECT COUNT(*) FROM paper_funding_events WHERE symbol='BTCUSDT'"
+        ).fetchone()[0]
+        self.assertEqual(event_count, 0)
+
     def test_restart_recovers_open_positions(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
         self.engine.close()
