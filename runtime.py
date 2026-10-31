@@ -125,6 +125,7 @@ class FuturesPaperRuntime:
             received_at = time.monotonic()
             for symbol in updated:
                 self._mark_updated_at[symbol] = received_at
+            self.engine.update_market_prices(updated)
             return dict(updated)
 
     def _on_closed_candle(self, candle: FuturesCandle) -> None:
@@ -147,6 +148,9 @@ class FuturesPaperRuntime:
             strategy_candles,
             position_side=position["side"] if position else None,
         )
+        self.engine.record_signal(candle.symbol, decision.action, decision.side,
+                                  decision.reason, int(candle.open_time))
+        self.engine.record_event(f"{candle.symbol} {decision.action}: {decision.reason}")
         if decision.action in ("OPEN_LONG", "OPEN_SHORT") and decision.side:
             with self._lock:
                 mark_time = self._mark_updated_at.get(candle.symbol, 0.0)
@@ -160,12 +164,16 @@ class FuturesPaperRuntime:
                 self.last_error = (
                     f"{candle.symbol}: entry skipped because no fresh public mark price is available"
                 )
+                self.engine.record_event(self.last_error, "WARNING")
                 return
             try:
                 self.engine.open_position(candle.symbol, decision.side, mark)
-                print(f" PAPER OPEN {candle.symbol} {decision.side} @ {mark:.8g}")
+                message = f"PAPER OPEN {candle.symbol} {decision.side} @ {mark:.8g}"
+                self.engine.record_event(message, "TRADE")
+                print(f" {message}")
             except ValueError as exc:
                 self.last_error = f"{candle.symbol}: {exc}"
+                self.engine.record_event(self.last_error, "WARNING")
 
     def _sync_funding(self) -> None:
         """Apply newly settled public funding events once per open position."""
@@ -186,13 +194,14 @@ class FuturesPaperRuntime:
                         funding_time_ms=event.funding_time,
                     )
                     if payment:
-                        print(
-                            f" PAPER FUNDING {symbol}: {payment:+.6f} USDT "
-                            f"at rate {event.funding_rate:+.6%}"
-                        )
+                        message = (f"PAPER FUNDING {symbol}: {payment:+.6f} USDT "
+                                   f"at rate {event.funding_rate:+.6%}")
+                        self.engine.record_event(message, "FUNDING")
+                        print(f" {message}")
             except (requests.RequestException, ValueError, KeyError) as exc:
                 # A funding-history outage must never interrupt TP/SL monitoring.
                 self.last_error = f"{symbol}: funding update unavailable: {exc}"
+                self.engine.record_event(self.last_error, "WARNING")
         self._last_funding_poll = now
 
     def _daily_realized_loss_reached(self) -> bool:
@@ -219,14 +228,22 @@ class FuturesPaperRuntime:
             )
             if decision.action == "CLOSE_TAKE_PROFIT":
                 self.engine.close_position(symbol, mark, reason="TAKE_PROFIT")
-                print(f" PAPER TP {symbol} @ {mark:.8g}; net={net:.4f} USDT")
+                message = f"PAPER TP {symbol} @ {mark:.8g}; net={net:.4f} USDT"
+                self.engine.record_event(message, "TRADE")
+                print(f" {message}")
             elif decision.action == "CLOSE_AND_REVERSE":
                 self.engine.close_position(symbol, mark, reason="STOP_LOSS")
+                self.engine.record_event(
+                    f"PAPER STOP LOSS {symbol} @ {mark:.8g}; net={net:.4f} USDT", "TRADE"
+                )
                 try:
                     self.engine.open_position(symbol, decision.side, mark)
-                    print(f" PAPER SL-REVERSE {symbol} {decision.side} @ {mark:.8g}")
+                    message = f"PAPER SL-REVERSE {symbol} {decision.side} @ {mark:.8g}"
+                    self.engine.record_event(message, "TRADE")
+                    print(f" {message}")
                 except ValueError as exc:
                     self.last_error = f"{symbol}: stopped flat; reversal skipped: {exc}"
+                    self.engine.record_event(self.last_error, "WARNING")
 
     def _close_all_and_verify(self) -> bool:
         positions = self.engine.snapshot()["positions"]
@@ -269,10 +286,12 @@ class FuturesPaperRuntime:
                                 "Daily realized-loss limit reached; new entries paused "
                                 "until manually resumed."
                             )
+                            self.engine.record_event(self.last_error, "WARNING")
                             print(self.last_error)
                         self._manage_positions()
                     except (requests.RequestException, ValueError, KeyError) as exc:
                         self.last_error = str(exc)
+                        self.engine.record_event(self.last_error, "ERROR")
                         print(f"Market-data/position update error: {exc}")
                 self._stop.wait(self.mark_poll_seconds)
         finally:

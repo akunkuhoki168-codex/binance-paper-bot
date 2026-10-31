@@ -1,8 +1,4 @@
-"""Streamlit control and monitoring UI for the Futures paper runtime.
-
-Run main.py separately to keep the runtime active. Dashboard controls communicate
-through SQLite; the dashboard does not pretend to spawn or restart processes.
-"""
+"""Auto-refreshing Streamlit monitoring for the paper-only Futures bot."""
 import os
 import sqlite3
 from pathlib import Path
@@ -16,13 +12,12 @@ from paper_engine.engine import PaperEngine, PaperEngineSettings
 
 load_dotenv()
 DB = os.getenv("DB_PATH", "data/paper_engine.sqlite3")
-
-st.set_page_config(page_title="Binance Futures Paper Bot", page_icon="📈", layout="wide")
-st.title("Binance Futures Paper Trading")
-st.caption("Public Binance USDⓈ-M market data · Simulated paper execution only · No live orders")
+st.set_page_config(page_title="Futures Paper Bot", page_icon="📈", layout="wide")
+st.title("Binance USDⓈ-M Futures · Paper Monitor")
+st.caption("PUBLIC MARKET DATA · SIMULATED EXECUTION ONLY · NO LIVE ORDERS OR API KEYS")
 
 if not Path(DB).exists():
-    st.info("Start the runtime with `python main.py`, then refresh this dashboard.")
+    st.info("Start the runtime with python main.py, then refresh this dashboard.")
     st.stop()
 
 settings = PaperEngineSettings(
@@ -36,79 +31,111 @@ settings = PaperEngineSettings(
 )
 engine = PaperEngine(DB, settings)
 
-col1, col2, col3, col4, col5 = st.columns(5)
-
-if col1.button("START / RESUME", use_container_width=True):
+controls = st.columns(4)
+if controls[0].button("START / RESUME", use_container_width=True):
     engine.set_bot_state("RUNNING")
-    st.success("RUNNING: new entries enabled; existing positions are managed.")
-
-if col2.button("PAUSE", use_container_width=True):
+    engine.record_event("Dashboard requested START / RESUME")
+    st.rerun()
+if controls[1].button("PAUSE", use_container_width=True):
     engine.set_bot_state("PAUSED")
-    st.warning("PAUSED: new entries disabled; existing positions continue to be managed.")
-
-if col3.button("RESTART SIGNALS", use_container_width=True):
-    engine.set_bot_state("RUNNING")
-    st.info("Runtime resumed from SQLite state. This does not restart the operating-system process.")
-
-if col4.button("FORCE CLOSE ALL", use_container_width=True):
+    engine.record_event("Dashboard requested PAUSE", "WARNING")
+    st.rerun()
+if controls[2].button("STOP BOT", use_container_width=True):
+    engine.set_bot_state("STOPPING")
+    engine.record_event("Dashboard requested graceful STOP", "WARNING")
+    st.rerun()
+if controls[3].button("FORCE CLOSE ALL", use_container_width=True):
     if st.session_state.get("confirm_force_close"):
-        positions = engine.snapshot()["positions"]
         try:
-            response = requests.get(
-                "https://fapi.binance.com/fapi/v1/premiumIndex", timeout=10
-            )
+            positions = engine.snapshot()["positions"]
+            response = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=10)
             response.raise_for_status()
             payload = response.json()
             rows = payload if isinstance(payload, list) else [payload]
             wanted = set(positions)
-            marks = {
-                str(row.get("symbol", "")).upper(): float(row["markPrice"])
-                for row in rows
-                if str(row.get("symbol", "")).upper() in wanted
-                and float(row.get("markPrice", 0)) > 0
-            }
+            marks = {str(row.get("symbol", "")).upper(): float(row["markPrice"])
+                     for row in rows if str(row.get("symbol", "")).upper() in wanted
+                     and float(row.get("markPrice", 0)) > 0}
             results = engine.force_close_all(marks)
+            for symbol, result in results.items():
+                engine.record_event(f"Force close {symbol}: {result}",
+                                    "TRADE" if result == "closed" else "ERROR")
             st.write(results)
-            remaining = engine.snapshot()["positions"]
-            if remaining:
-                st.error(f"Some positions remain open: {', '.join(remaining)}")
-            else:
-                st.success("All paper positions are closed.")
+            st.session_state["confirm_force_close"] = False
         except (requests.RequestException, ValueError, KeyError) as exc:
-            st.error(f"Could not obtain valid public mark prices: {exc}")
-        st.session_state["confirm_force_close"] = False
+            st.error(f"Could not obtain public mark prices: {exc}")
     else:
         st.session_state["confirm_force_close"] = True
-        st.warning("Click FORCE CLOSE ALL again to confirm. Positions will be simulated closed at current public mark prices.")
+        st.warning("Click FORCE CLOSE ALL again to confirm simulated closes.")
 
-if col5.button("STOP BOT", use_container_width=True):
-    engine.set_bot_state("STOPPING")
-    st.error("STOPPING requested. The running main.py process will close positions at public marks, verify none remain, then exit. Keep this dashboard open.")
+state = engine.get_bot_state()
+st.subheader(("🟢 " if state == "RUNNING" else "🟠 " if state == "PAUSED" else "🔴 ")
+             + f"BOT {state} · PAPER MODE")
 
-snap = engine.snapshot()
-status_col1, status_col2, status_col3, status_col4 = st.columns(4)
-status_col1.metric("Bot state", snap.get("bot_state", "IDLE"))
-status_col2.metric("Paper wallet", f"{snap['wallet']:.2f} USDT")
-status_col3.metric("Equity (entry marks)", f"{snap['equity']:.2f} USDT")
-status_col4.metric("Active positions", snap["active_positions"])
+@st.fragment(run_every="5s")
+def live_monitor():
+    snap = engine.snapshot()
+    a, b, c, d, e, f = st.columns(6)
+    a.metric("Equity", f"{snap['equity']:,.2f} USDT")
+    b.metric("Wallet", f"{snap['wallet']:,.2f} USDT")
+    c.metric("Realized P&L", f"{snap['realized_pnl']:+,.2f} USDT")
+    d.metric("Fees paid", f"{snap['fees_paid']:,.2f} USDT")
+    e.metric("Funding net", f"{snap['funding_net']:+,.4f} USDT")
+    f.metric("Open positions", snap["active_positions"])
 
-if snap["positions"]:
-    st.subheader("Open positions")
-    st.dataframe(pd.DataFrame(snap["positions"]).T, use_container_width=True)
-
-st.subheader("Recent trades")
-try:
     with sqlite3.connect(DB) as db:
-        trades = pd.read_sql_query(
-            "SELECT * FROM paper_trades ORDER BY id DESC LIMIT 50", db
-        )
-    if not trades.empty:
-        st.dataframe(trades, use_container_width=True, hide_index=True)
-    else:
-        st.info("No trades yet.")
-except (sqlite3.Error, pd.errors.DatabaseError) as exc:
-    st.warning(f"Could not read trades: {exc}")
+        prices = pd.read_sql_query("SELECT symbol,mark_price,updated_at FROM market_prices ORDER BY symbol", db)
+        signals = pd.read_sql_query("SELECT symbol,action,side,reason,created_at FROM strategy_signals ORDER BY id DESC LIMIT 30", db)
+        events = pd.read_sql_query("SELECT level,message,created_at FROM runtime_events ORDER BY id DESC LIMIT 30", db)
+        trades = pd.read_sql_query("SELECT symbol,side,action,quantity,price,fee,net_pnl,reason,created_at FROM paper_trades ORDER BY id DESC LIMIT 50", db)
 
-st.caption("Daily loss guard uses realized closed-trade PnL since 00:00 UTC. When the configured limit is reached, new entries are paused; open positions continue to be managed. Unrealized losses are not included in this daily guard.")
-st.caption("The runtime must be started separately with python main.py. Dashboard controls update SQLite state. Paper trading only.")
+    st.divider()
+    st.subheader("Live Futures mark prices")
+    if prices.empty:
+        st.info("Waiting for public mark-price updates.")
+    else:
+        prices["Updated (UTC)"] = pd.to_datetime(prices["updated_at"], unit="ms", utc=True).dt.strftime("%H:%M:%S")
+        st.dataframe(prices[["symbol","mark_price","Updated (UTC)"]], use_container_width=True, hide_index=True)
+
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Open paper positions")
+        if snap["positions"]:
+            rows = [{"Symbol":s,"Side":p["side"],"Quantity":p["quantity"],
+                     "Entry price":p["entry_price"],"Margin USDT":p["margin"],
+                     "Entry fee":p["entry_fee"],"Funding net":p["funding_net"]}
+                    for s,p in snap["positions"].items()]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No open positions.")
+    with right:
+        st.subheader("Recent strategy signals")
+        if signals.empty:
+            st.info("No closed-candle decisions recorded yet. With a 15m strategy, decisions are evaluated when each 15-minute candle closes.")
+        else:
+            signals["Time (UTC)"] = pd.to_datetime(signals["created_at"], unit="ms", utc=True).dt.strftime("%Y-%m-%d %H:%M:%S")
+            st.dataframe(signals[["Time (UTC)","symbol","action","side","reason"]], use_container_width=True, hide_index=True)
+
+    st.divider()
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Trade history")
+        if trades.empty:
+            st.info("No paper trades yet. The strategy waits for a confirmed Heikin-Ashi colour flip on a completed candle.")
+        else:
+            trades["Time (UTC)"] = pd.to_datetime(trades["created_at"], unit="ms", utc=True).dt.strftime("%Y-%m-%d %H:%M:%S")
+            st.dataframe(trades[["Time (UTC)","symbol","side","action","quantity","price","fee","net_pnl","reason"]], use_container_width=True, hide_index=True)
+    with right:
+        st.subheader("Bot activity")
+        if events.empty:
+            st.info("No runtime events recorded yet.")
+        else:
+            events["Time (UTC)"] = pd.to_datetime(events["created_at"], unit="ms", utc=True).dt.strftime("%Y-%m-%d %H:%M:%S")
+            st.dataframe(events[["Time (UTC)","level","message"]], use_container_width=True, hide_index=True)
+
+    st.caption(f"Risk settings: {settings.leverage}× leverage · TP {settings.take_profit_usdt:.2f} USDT · "
+               f"SL {settings.stop_loss_usdt:.2f} USDT · max {settings.max_positions} positions · "
+               f"daily realized-loss guard {settings.daily_loss_limit_usdt:.2f} USDT (UTC).")
+
+live_monitor()
 engine.close()
