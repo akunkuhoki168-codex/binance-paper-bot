@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from market_data.klines import KlineDataManager
+from market_data.klines import KlineDataManager, eligible_usdt_perpetuals
 from market_data.websocket import KlineWebSocket
 from market_data.universe import CoinMarketCapUniverse
 
@@ -34,21 +34,56 @@ class UniverseProviderTests(unittest.TestCase):
 
     def test_returns_unique_ranked_symbols_and_sends_key_header(self):
         session = FakeSession({"data": [
-            {"symbol": "BTC"}, {"symbol": "ETH"}, {"symbol": "BTC"},
-            {"symbol": ""}, {"name": "No symbol"},
+            {"cmc_rank": 1, "symbol": "BTC"},
+            {"cmc_rank": 2, "symbol": "ETH"},
+            {"cmc_rank": 3, "symbol": "BTC"},
+            {"cmc_rank": 4, "symbol": ""},
+            {"cmc_rank": 5, "name": "No symbol"},
         ]})
         provider = CoinMarketCapUniverse(api_key="test-key", session=session)
-        self.assertEqual(provider.top_base_symbols(50), ["BTC", "ETH"])
+        self.assertEqual(provider.top_base_symbols(5), ["BTC", "ETH"])
         _url, kwargs = session.calls[0]
         self.assertEqual(kwargs["headers"]["X-CMC_PRO_API_KEY"], "test-key")
-        self.assertEqual(kwargs["params"]["limit"], 50)
+        self.assertEqual(kwargs["params"]["limit"], 5)
+        self.assertEqual(kwargs["params"]["start"], 1)
+
+    def test_ranked_list_starts_at_51_and_excludes_any_top_50_rows(self):
+        session = FakeSession({"data": [
+            {"cmc_rank": 50, "symbol": "BTC"},
+            {"cmc_rank": 51, "symbol": "ALT"},
+            {"cmc_rank": 52, "symbol": "ALT2"},
+        ]})
+        provider = CoinMarketCapUniverse(api_key="test-key", session=session)
+        self.assertEqual(provider.ranked_base_symbols(start_rank=51, limit=100), ["ALT", "ALT2"])
+        _url, kwargs = session.calls[0]
+        self.assertEqual(kwargs["params"]["start"], 51)
+        self.assertEqual(kwargs["params"]["limit"], 100)
 
     def test_rejects_bad_response(self):
         provider = CoinMarketCapUniverse(
             api_key="test-key", session=FakeSession({"status": {}})
         )
         with self.assertRaises(ValueError):
-            provider.top_base_symbols()
+            provider.ranked_base_symbols()
+
+    def test_rejects_rank_range_beyond_supported_listings(self):
+        provider = CoinMarketCapUniverse(api_key="test-key", session=FakeSession({"data": []}))
+        with self.assertRaises(ValueError):
+            provider.ranked_base_symbols(start_rank=5000, limit=2)
+
+    def test_intersects_ranked_assets_with_active_usdt_perpetuals(self):
+        ranked = ["BTC", "ALT", "ALT2", "NOTLISTED"]
+        exchange = {"symbols": [
+            {"symbol": "BTCUSDT", "baseAsset": "BTC", "quoteAsset": "USDT",
+             "contractType": "PERPETUAL", "status": "TRADING"},
+            {"symbol": "ALTUSDT", "baseAsset": "ALT", "quoteAsset": "USDT",
+             "contractType": "PERPETUAL", "status": "TRADING"},
+            {"symbol": "ALT2USDT", "baseAsset": "ALT2", "quoteAsset": "USDT",
+             "contractType": "PERPETUAL", "status": "BREAK"},
+            {"symbol": "ALT2BUSD", "baseAsset": "ALT2", "quoteAsset": "BUSD",
+             "contractType": "PERPETUAL", "status": "TRADING"},
+        ]}
+        self.assertEqual(eligible_usdt_perpetuals(ranked, exchange, limit=10), ["BTCUSDT"])
 
 
 class WebSocketClientTests(unittest.TestCase):
