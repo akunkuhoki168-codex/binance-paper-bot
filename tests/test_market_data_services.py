@@ -72,7 +72,7 @@ class UniverseProviderTests(unittest.TestCase):
             provider.ranked_base_symbols(start_rank=5000, limit=2)
 
     def test_intersects_ranked_assets_with_active_usdt_perpetuals(self):
-        ranked = ["BTC", "ALT", "ALT2", "NOTLISTED"]
+        ranked = ["ALT", "ALT2", "NOTLISTED"]
         exchange = {"symbols": [
             {"symbol": "BTCUSDT", "baseAsset": "BTC", "quoteAsset": "USDT",
              "contractType": "PERPETUAL", "status": "TRADING"},
@@ -83,7 +83,7 @@ class UniverseProviderTests(unittest.TestCase):
             {"symbol": "ALT2BUSD", "baseAsset": "ALT2", "quoteAsset": "BUSD",
              "contractType": "PERPETUAL", "status": "TRADING"},
         ]}
-        self.assertEqual(eligible_usdt_perpetuals(ranked, exchange, limit=10), ["BTCUSDT"])
+        self.assertEqual(eligible_usdt_perpetuals(ranked, exchange, limit=10), ["ALTUSDT"])
 
 
 class WebSocketClientTests(unittest.TestCase):
