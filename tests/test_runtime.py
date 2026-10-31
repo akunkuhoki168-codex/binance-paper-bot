@@ -77,6 +77,20 @@ class RuntimeControlTests(unittest.TestCase):
         fetch.assert_called_once_with("BTCUSDT", 1_000)
         self.assertAlmostEqual(self.engine.snapshot()["funding_net"], -0.3992015968063872)
 
+    def test_funding_api_outage_does_not_block_position_management(self):
+        import requests
+        self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
+        decision = SimpleNamespace(action="CLOSE_TAKE_PROFIT")
+        with patch.object(
+            self.runtime.funding_client, "funding_events",
+            side_effect=requests.ConnectionError("temporary outage"),
+        ), patch.object(self.runtime, "refresh_marks", return_value={"BTCUSDT": 101}), patch.object(
+            self.runtime.strategy, "evaluate_position", return_value=decision
+        ):
+            self.runtime._manage_positions()
+        self.assertEqual(self.engine.snapshot()["active_positions"], 0)
+        self.assertIn("funding update unavailable", self.runtime.last_error)
+
     def test_daily_realized_loss_guard_uses_utc_day(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
         self.engine.close_position("BTCUSDT", 90)
