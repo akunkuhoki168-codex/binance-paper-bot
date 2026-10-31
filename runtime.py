@@ -148,9 +148,11 @@ class FuturesPaperRuntime:
             strategy_candles,
             position_side=position["side"] if position else None,
         )
+        decision_reason = getattr(decision, "reason", decision.action)
+        candle_time = int(getattr(candle, "open_time", time.time() * 1000))
         self.engine.record_signal(candle.symbol, decision.action, decision.side,
-                                  decision.reason, int(candle.open_time))
-        self.engine.record_event(f"{candle.symbol} {decision.action}: {decision.reason}")
+                                  decision_reason, candle_time)
+        self.engine.record_event(f"{candle.symbol} {decision.action}: {decision_reason}")
         if decision.action in ("OPEN_LONG", "OPEN_SHORT") and decision.side:
             with self._lock:
                 mark_time = self._mark_updated_at.get(candle.symbol, 0.0)
