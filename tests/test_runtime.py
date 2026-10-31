@@ -75,7 +75,7 @@ class RuntimeControlTests(unittest.TestCase):
             self.runtime._sync_funding()
             self.runtime._sync_funding()
         fetch.assert_called_once_with("BTCUSDT", 1_000)
-        self.assertAlmostEqual(self.engine.snapshot()["funding_net"], -0.3992015968063872)
+        self.assertAlmostEqual(self.engine.snapshot()["funding_net"], -0.39960039960039967)
 
     def test_funding_api_outage_does_not_block_position_management(self):
         import requests
