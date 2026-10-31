@@ -135,6 +135,12 @@ class PaperEngine:
             CREATE TABLE IF NOT EXISTS market_prices (
                 symbol TEXT PRIMARY KEY, mark_price REAL NOT NULL, updated_at INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS risk_settings (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                take_profit_usdt REAL NOT NULL,
+                stop_loss_usdt REAL NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
         """)
         self._db.execute(
             "INSERT OR IGNORE INTO paper_account(id,wallet) VALUES(1,?)",
@@ -144,6 +150,10 @@ class PaperEngine:
         self._db.execute(
             "INSERT OR IGNORE INTO bot_control(id,state,updated_at) VALUES(1,'IDLE',?)",
             (now,),
+        )
+        self._db.execute(
+            "INSERT OR IGNORE INTO risk_settings(id,take_profit_usdt,stop_loss_usdt,updated_at) VALUES(1,?,?,?)",
+            (self.settings.take_profit_usdt, self.settings.stop_loss_usdt, now),
         )
         self._db.commit()
         self._positions: dict[str, PaperPosition] = {}
@@ -163,6 +173,21 @@ class PaperEngine:
     def close(self):
         with self._lock:
             self._db.close()
+
+    def refresh_risk_settings(self) -> tuple[float, float]:
+        """Reload dashboard-managed TP/SL values from the shared SQLite database."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT take_profit_usdt, stop_loss_usdt FROM risk_settings WHERE id=1"
+            ).fetchone()
+            if row:
+                from dataclasses import replace
+                self.settings = replace(
+                    self.settings,
+                    take_profit_usdt=float(row["take_profit_usdt"]),
+                    stop_loss_usdt=float(row["stop_loss_usdt"]),
+                )
+            return self.settings.take_profit_usdt, self.settings.stop_loss_usdt
 
     def get_bot_state(self) -> BotState:
         with self._lock:
