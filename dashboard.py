@@ -135,10 +135,6 @@ if st.button("RESET ACCOUNT TO INITIAL BALANCE", use_container_width=True):
     if st.session_state.get("confirm_account_reset"):
         try:
             restored = engine.reset_account()
-            engine.record_event(
-                f"Paper account reset to initial balance: {restored:.2f} USDT; trade history retained.",
-                "WARNING",
-            )
             st.session_state["confirm_account_reset"] = False
             st.success(f"Paper account restored to {restored:.2f} USDT. Bot is paused.")
             st.rerun()
@@ -148,8 +144,9 @@ if st.button("RESET ACCOUNT TO INITIAL BALANCE", use_container_width=True):
         st.session_state["confirm_account_reset"] = True
         st.warning(
             "Click RESET ACCOUNT TO INITIAL BALANCE again to confirm. "
-            "Open positions will be discarded; wallet and P&L statistics reset. "
-            "Trade history and strategy signals will be kept."
+            "All paper trades, signals, activity logs, market snapshots, open positions, "
+            "and account statistics will be cleared. The wallet returns to the configured "
+            "initial balance and the bot stays paused."
         )
 
 state = engine.get_bot_state()

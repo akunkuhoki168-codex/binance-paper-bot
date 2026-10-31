@@ -202,28 +202,33 @@ class PaperEngine:
             self._db.commit()
 
     def reset_account(self) -> float:
-        """Restore the paper wallet and clear live account state, preserving history.
+        """Reset the paper account and erase all historical paper activity.
 
-        The bot is left PAUSED so trading resumes only after an explicit user action.
+        The bot is left PAUSED. SQLite is the source of truth so other
+        processes discard stale in-memory positions on their next snapshot.
         """
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
             try:
-                state = self._db.execute(
-                    "SELECT state FROM bot_control WHERE id=1"
-                ).fetchone()
-                if state and state["state"] == "STOPPING":
-                    raise RuntimeError(
-                        "The bot is stopping. Wait until it reaches IDLE, then reset."
-                    )
                 now = int(time.time() * 1000)
                 self._db.execute(
                     "UPDATE bot_control SET state='PAUSED', updated_at=? WHERE id=1",
                     (now,),
                 )
-                self._db.execute("DELETE FROM paper_positions")
-                self._db.execute("DELETE FROM paper_cooldowns")
-                self._db.execute("DELETE FROM paper_funding_events")
+                for table in (
+                    "paper_positions",
+                    "paper_cooldowns",
+                    "paper_funding_events",
+                    "paper_trades",
+                    "strategy_signals",
+                    "runtime_events",
+                    "market_prices",
+                ):
+                    self._db.execute(f"DELETE FROM {table}")
+                self._db.execute(
+                    "DELETE FROM sqlite_sequence WHERE name IN "
+                    "('paper_trades', 'strategy_signals', 'runtime_events')"
+                )
                 self._db.execute(
                     "UPDATE paper_account SET wallet=?, realized_pnl=0, "
                     "fees_paid=0, funding_net=0 WHERE id=1",
@@ -494,6 +499,10 @@ class PaperEngine:
 
     def snapshot(self, marks: dict[str, float] | None = None) -> dict:
         with self._lock:
+            # The dashboard and runtime are separate processes. Reload positions
+            # from SQLite so an account reset in either process is immediately
+            # reflected in this process instead of reviving stale positions.
+            self._recover_positions()
             account = self._account()
             return {
                 "wallet": float(account["wallet"]),
