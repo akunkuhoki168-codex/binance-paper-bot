@@ -63,6 +63,19 @@ class PaperEngineAccountingTests(unittest.TestCase):
         self.assertEqual(results["BTCUSDT"], "missing or invalid mark price")
         self.assertIn("BTCUSDT", self.engine.snapshot()["positions"])
 
+    def test_dashboard_monitoring_persistence(self):
+        self.engine.record_signal("btcusdt", "OPEN_LONG", "LONG", "HA flip", 123)
+        self.engine.record_event("feed connected")
+        self.engine.update_market_prices({"btcusdt": 101.5})
+        import sqlite3
+        with sqlite3.connect(self.db) as db:
+            signal = db.execute("SELECT symbol,action,side,reason,candle_time FROM strategy_signals").fetchone()
+            event = db.execute("SELECT message FROM runtime_events").fetchone()
+            price = db.execute("SELECT symbol,mark_price FROM market_prices").fetchone()
+        self.assertEqual(signal, ("BTCUSDT", "OPEN_LONG", "LONG", "HA flip", 123))
+        self.assertEqual(event[0], "feed connected")
+        self.assertEqual(price, ("BTCUSDT", 101.5))
+
     def test_take_profit_cooldown_is_persisted(self):
         self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1)
         self.engine.close_position("BTCUSDT", 101, reason="TAKE_PROFIT", now_ms=1000)
