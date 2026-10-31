@@ -69,7 +69,6 @@ Open http://localhost:8501. The runtime must remain running in its own terminal.
 | `TAKER_FEE_RATE` | `0.0005` | Simulated taker fee |
 | `TAKE_PROFIT_USDT` | `10` | Net PnL take-profit threshold |
 | `STOP_LOSS_USDT` | `5` | Net PnL stop-loss threshold |
-| `DAILY_LOSS_LIMIT_USDT` | `50` | Pause new entries after this much net realized daily loss; 0 disables |
 
 ## Dashboard controls
 
@@ -77,12 +76,12 @@ Open http://localhost:8501. The runtime must remain running in its own terminal.
 - **PAUSE** — blocks new entries while continuing to manage open positions.
 - **RESTART SIGNALS** — resumes runtime state; it does not restart the OS process.
 - **FORCE CLOSE ALL** — requires a second click and uses current public mark prices.
+- **RESET ACCOUNT TO INITIAL BALANCE** — requires a second click, restores the configured initial wallet, clears all paper trades, strategy signals, activity logs, market-price snapshots, open positions, and account statistics, then leaves the bot paused.
 - **STOP BOT** — requests graceful shutdown. The runtime closes positions using fresh WebSocket marks and verifies no positions remain.
 
 ## Persistence and safety
 
 Positions, wallet, trade history, fees, funding, cooldowns, and bot state are stored in SQLite. Settled funding-rate events are polled from Binance's public funding-history endpoint and applied once per funding timestamp.
 
-The daily loss guard sums net realized PnL from closed trades since 00:00 UTC. It does not include unrealized losses, so it is a limited circuit breaker rather than a complete account-equity drawdown control.
 
 This is a paper simulator: fills, slippage, funding timing, liquidation, and exchange execution are not exact reproductions of Binance. Never commit API keys, secrets, or `.env` files. Live trading is not implemented.
