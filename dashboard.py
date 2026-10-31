@@ -136,7 +136,7 @@ if st.button("RESET ACCOUNT TO INITIAL BALANCE", use_container_width=True):
         try:
             restored = engine.reset_account()
             st.session_state["confirm_account_reset"] = False
-            st.success(f"Paper account restored to {restored:.2f} USDT. Bot is paused.")
+            st.success(f"Paper account restored to {restored:.2f} USDT. Bot is stopping; restart it manually when ready.")
             st.rerun()
         except RuntimeError as exc:
             st.error(str(exc))
@@ -146,7 +146,7 @@ if st.button("RESET ACCOUNT TO INITIAL BALANCE", use_container_width=True):
             "Click RESET ACCOUNT TO INITIAL BALANCE again to confirm. "
             "All paper trades, signals, activity logs, market snapshots, open positions, "
             "and account statistics will be cleared. The wallet returns to the configured "
-            "initial balance and the bot stays paused."
+            "initial balance and the running bot process will stop. You must start it manually again."
         )
 
 state = engine.get_bot_state()
