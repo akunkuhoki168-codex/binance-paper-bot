@@ -34,14 +34,13 @@ class RuntimeControlTests(unittest.TestCase):
 
     def test_stop_closes_positions_using_current_marks(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
-        with patch.object(self.runtime, "refresh_marks", return_value={"BTCUSDT": 101}):
-            self.assertTrue(self.runtime._close_all_and_verify())
+        self.runtime._on_mark_prices({"BTCUSDT": 101})
+        self.assertTrue(self.runtime._close_all_and_verify())
         self.assertEqual(self.engine.snapshot()["active_positions"], 0)
 
     def test_stop_does_not_claim_success_without_a_valid_mark(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
-        with patch.object(self.runtime, "refresh_marks", return_value={}):
-            self.assertFalse(self.runtime._close_all_and_verify())
+        self.assertFalse(self.runtime._close_all_and_verify())
         self.assertEqual(self.engine.snapshot()["active_positions"], 1)
 
     def test_stop_with_no_positions_is_already_complete(self):
@@ -95,7 +94,7 @@ class RuntimeControlTests(unittest.TestCase):
         with patch.object(
             self.runtime.funding_client, "funding_events",
             side_effect=requests.ConnectionError("temporary outage"),
-        ), patch.object(self.runtime, "refresh_marks", return_value={"BTCUSDT": 101}), patch.object(
+        ), patch.object(self.runtime, "current_fresh_marks", return_value={"BTCUSDT": 101}), patch.object(
             self.runtime.strategy, "evaluate_position", return_value=decision
         ):
             self.runtime._manage_positions()

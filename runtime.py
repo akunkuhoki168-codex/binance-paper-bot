@@ -19,7 +19,7 @@ from market_data.klines import (
     FuturesCandle,
     KlineDataManager,
 )
-from market_data.websocket import KlineWebSocket
+from market_data.websocket import KlineWebSocket, MarkPriceWebSocket
 from paper_engine.engine import PaperEngine
 from strategies.HA_flips import (
     Candle,
@@ -69,6 +69,8 @@ class FuturesPaperRuntime:
         self._stop = threading.Event()
         self._feed_thread: threading.Thread | None = None
         self._feed: KlineWebSocket | None = None
+        self._mark_feed_thread: threading.Thread | None = None
+        self._mark_feed: MarkPriceWebSocket | None = None
         self._marks: dict[str, float] = {}
         self._mark_updated_at: dict[str, float] = {}
         self._lock = threading.RLock()
@@ -100,6 +102,37 @@ class FuturesPaperRuntime:
             daemon=True,
         )
         self._feed_thread.start()
+        self._mark_feed = MarkPriceWebSocket(self.symbols, self._on_mark_prices)
+        self._mark_feed_thread = threading.Thread(
+            target=self._mark_feed.run_forever,
+            name="binance-public-mark-price-feed",
+            daemon=True,
+        )
+        self._mark_feed_thread.start()
+
+    def _on_mark_prices(self, prices: dict[str, float]) -> None:
+        valid = {
+            symbol: price for symbol, price in prices.items()
+            if symbol in self.symbols and isfinite(price) and price > 0
+        }
+        if not valid:
+            return
+        with self._lock:
+            self._marks.update(valid)
+            received_at = time.monotonic()
+            for symbol in valid:
+                self._mark_updated_at[symbol] = received_at
+            self.engine.update_market_prices(valid)
+
+    def current_fresh_marks(self) -> dict[str, float]:
+        """Return only marks recently received from the public WebSocket."""
+        cutoff = max(10.0, self.mark_poll_seconds * 3)
+        now = time.monotonic()
+        with self._lock:
+            return {
+                symbol: price for symbol, price in self._marks.items()
+                if now - self._mark_updated_at.get(symbol, 0.0) <= cutoff
+            }
 
     def refresh_marks(self) -> dict[str, float]:
         """Fetch public mark prices; never uses authenticated endpoints."""
@@ -218,7 +251,7 @@ class FuturesPaperRuntime:
 
     def _manage_positions(self) -> None:
         self._sync_funding()
-        marks = self.refresh_marks()
+        marks = self.current_fresh_marks()
         positions = self.engine.snapshot()["positions"]
         for symbol, position in positions.items():
             mark = marks.get(symbol)
@@ -251,7 +284,7 @@ class FuturesPaperRuntime:
         positions = self.engine.snapshot()["positions"]
         if not positions:
             return True
-        marks = self.refresh_marks()
+        marks = self.current_fresh_marks()
         results = self.engine.force_close_all(marks)
         failures = {symbol: result for symbol, result in results.items() if result != "closed"}
         if failures:
@@ -305,3 +338,7 @@ class FuturesPaperRuntime:
             self._feed.stop()
         if self._feed_thread and self._feed_thread.is_alive():
             self._feed_thread.join(timeout=5)
+        if self._mark_feed:
+            self._mark_feed.stop()
+        if self._mark_feed_thread and self._mark_feed_thread.is_alive():
+            self._mark_feed_thread.join(timeout=5)

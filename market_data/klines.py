@@ -133,6 +133,40 @@ def eligible_usdt_perpetuals(
     return selected
 
 
+def ranked_usdt_perpetuals_by_quote_volume(
+    exchange_info: Mapping[str, Any],
+    ticker_rows: Iterable[Mapping[str, Any]],
+    exclude_top: int = 50,
+    limit: int = 200,
+) -> list[str]:
+    """Rank active USDT perpetuals by 24h quote volume and skip the busiest N."""
+    if not isinstance(exclude_top, int) or exclude_top < 0:
+        raise ValueError("exclude_top must be a non-negative integer")
+    if not isinstance(limit, int) or limit < 1:
+        raise ValueError("limit must be a positive integer")
+    eligible = {
+        str(item.get("symbol", "")).upper()
+        for item in exchange_info.get("symbols", [])
+        if item.get("status") == "TRADING"
+        and item.get("contractType") == "PERPETUAL"
+        and item.get("quoteAsset") == "USDT"
+        and item.get("symbol")
+    }
+    volumes: dict[str, float] = {}
+    for row in ticker_rows:
+        symbol = str(row.get("symbol", "")).upper()
+        if symbol not in eligible:
+            continue
+        try:
+            volume = float(row.get("quoteVolume", 0))
+        except (TypeError, ValueError):
+            continue
+        if isfinite(volume) and volume >= 0:
+            volumes[symbol] = volume
+    ordered = sorted(volumes, key=lambda symbol: (-volumes[symbol], symbol))
+    return ordered[exclude_top:exclude_top + limit]
+
+
 def websocket_stream_names(symbols: Iterable[str], intervals: Iterable[str]) -> list[str]:
     """Build Binance combined-stream names for every symbol/timeframe pair."""
     normalized_symbols = sorted({str(s).lower() for s in symbols if str(s)})
@@ -159,6 +193,15 @@ class BinanceFuturesKlineClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def ticker_24hr(self) -> list[Mapping[str, Any]]:
+        """Fetch the public 24-hour ticker snapshot for USDⓈ-M Futures."""
+        response = self.session.get(f"{REST_BASE}/fapi/v1/ticker/24hr", timeout=self.timeout)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise ValueError("Binance 24-hour ticker response must be a list")
+        return payload
 
     def closed_klines(
         self,
