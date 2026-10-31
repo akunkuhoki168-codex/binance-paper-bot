@@ -26,7 +26,7 @@ TP = float(os.getenv("TAKE_PROFIT_USDT", "10"))
 SL = float(os.getenv("STOP_LOSS_USDT", "5"))
 DAILY_LOSS_LIMIT = float(os.getenv("DAILY_LOSS_LIMIT_USDT", "50"))
 CMC_RANK_START = int(os.getenv("CMC_RANK_START", "51"))
-CMC_RANK_LIMIT = int(os.getenv("CMC_RANK_LIMIT", "5000"))
+CMC_RANK_LIMIT = int(os.getenv("CMC_RANK_LIMIT", "2000"))
 MAX_UNIVERSE_SYMBOLS = int(os.getenv("MAX_UNIVERSE_SYMBOLS", "200"))
 INTERVAL = os.getenv("STRATEGY_INTERVAL", "15m")
 
@@ -80,7 +80,7 @@ def main() -> None:
     engine = PaperEngine(DB_PATH, settings)
 
     def _handle_signal(*_args: object) -> None:
-        print("\\nShutdown requested; asking runtime to close positions safely.")
+        print("\nShutdown requested; asking runtime to close positions safely.")
         engine.set_bot_state("STOPPING")
 
     signal.signal(signal.SIGINT, _handle_signal)
