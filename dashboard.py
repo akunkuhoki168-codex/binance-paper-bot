@@ -29,7 +29,13 @@ settings = PaperEngineSettings(
     stop_loss_usdt=float(os.getenv("STOP_LOSS_USDT", "5")),
     daily_loss_limit_usdt=float(os.getenv("DAILY_LOSS_LIMIT_USDT", "50")),
 )
-engine = PaperEngine(DB, settings)
+@st.cache_resource
+def get_engine(db_path: str, engine_settings: PaperEngineSettings) -> PaperEngine:
+    """Keep one open SQLite-backed engine across Streamlit reruns/fragments."""
+    return PaperEngine(db_path, engine_settings)
+
+
+engine = get_engine(DB, settings)
 
 controls = st.columns(4)
 if controls[0].button("START / RESUME", use_container_width=True):
@@ -138,4 +144,3 @@ def live_monitor():
                f"daily realized-loss guard {settings.daily_loss_limit_usdt:.2f} USDT (UTC).")
 
 live_monitor()
-engine.close()
