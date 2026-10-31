@@ -1,89 +1,57 @@
 import json
 import unittest
 
-from market_data.klines import KlineDataManager, eligible_usdt_perpetuals
-from market_data.websocket import KlineWebSocket
-from market_data.universe import CoinMarketCapUniverse
-
-
-class FakeResponse:
-    def __init__(self, payload):
-        self.payload = payload
-
-    def raise_for_status(self):
-        return None
-
-    def json(self):
-        return self.payload
-
-
-class FakeSession:
-    def __init__(self, payload):
-        self.payload = payload
-        self.calls = []
-
-    def get(self, url, **kwargs):
-        self.calls.append((url, kwargs))
-        return FakeResponse(self.payload)
+from market_data.klines import KlineDataManager, ranked_usdt_perpetuals_by_quote_volume
+from market_data.websocket import KlineWebSocket, MarkPriceWebSocket
 
 
 class UniverseProviderTests(unittest.TestCase):
-    def test_requires_api_key(self):
-        with self.assertRaises(ValueError):
-            CoinMarketCapUniverse(api_key="")
-
-    def test_returns_unique_ranked_symbols_and_sends_key_header(self):
-        session = FakeSession({"data": [
-            {"cmc_rank": 1, "symbol": "BTC"},
-            {"cmc_rank": 2, "symbol": "ETH"},
-            {"cmc_rank": 3, "symbol": "BTC"},
-            {"cmc_rank": 4, "symbol": ""},
-            {"cmc_rank": 5, "name": "No symbol"},
-        ]})
-        provider = CoinMarketCapUniverse(api_key="test-key", session=session)
-        self.assertEqual(provider.top_base_symbols(5), ["BTC", "ETH"])
-        _url, kwargs = session.calls[0]
-        self.assertEqual(kwargs["headers"]["X-CMC_PRO_API_KEY"], "test-key")
-        self.assertEqual(kwargs["params"]["limit"], 5)
-        self.assertEqual(kwargs["params"]["start"], 1)
-
-    def test_ranked_list_starts_at_51_and_excludes_any_top_50_rows(self):
-        session = FakeSession({"data": [
-            {"cmc_rank": 50, "symbol": "BTC"},
-            {"cmc_rank": 51, "symbol": "ALT"},
-            {"cmc_rank": 52, "symbol": "ALT2"},
-        ]})
-        provider = CoinMarketCapUniverse(api_key="test-key", session=session)
-        self.assertEqual(provider.ranked_base_symbols(start_rank=51, limit=100), ["ALT", "ALT2"])
-        _url, kwargs = session.calls[0]
-        self.assertEqual(kwargs["params"]["start"], 51)
-        self.assertEqual(kwargs["params"]["limit"], 100)
-
-    def test_rejects_bad_response(self):
-        provider = CoinMarketCapUniverse(
-            api_key="test-key", session=FakeSession({"status": {}})
-        )
-        with self.assertRaises(ValueError):
-            provider.ranked_base_symbols()
-
-    def test_rejects_rank_range_beyond_supported_listings(self):
-        provider = CoinMarketCapUniverse(api_key="test-key", session=FakeSession({"data": []}))
-        with self.assertRaises(ValueError):
-            provider.ranked_base_symbols(start_rank=5000, limit=2)
-
-    def test_intersects_ranked_assets_with_active_usdt_perpetuals(self):
-        ranked = ["ALT", "ALT2", "NOTLISTED"]
+    def test_excludes_top_50_by_volume_and_selects_next_symbols(self):
         exchange = {"symbols": [
-            {"symbol": "BTCUSDT", "baseAsset": "BTC", "quoteAsset": "USDT",
-             "contractType": "PERPETUAL", "status": "TRADING"},
-            {"symbol": "ALTUSDT", "baseAsset": "ALT", "quoteAsset": "USDT",
-             "contractType": "PERPETUAL", "status": "TRADING"},
-            {"symbol": "ALT2USDT", "baseAsset": "ALT2", "quoteAsset": "USDT",
-             "contractType": "PERPETUAL", "status": "BREAK"},
-            {"symbol": "ALT2BUSD", "baseAsset": "ALT2", "quoteAsset": "BUSD",
-             "contractType": "PERPETUAL", "status": "TRADING"},
+            {"symbol": f"COIN{i}USDT", "quoteAsset": "USDT",
+             "contractType": "PERPETUAL", "status": "TRADING"}
+            for i in range(1, 56)
+        ] + [
+            {"symbol": "BTCUSDT", "quoteAsset": "USDT",
+             "contractType": "PERPETUAL", "status": "TRADING"}
         ]}
-        self.assertEqual(eligible_usdt_perpetuals(ranked, exchange, limit=10), ["ALTUSDT"])
+        tickers = [
+            {"symbol": f"COIN{i}USDT", "quoteVolume": str(1000 - i)}
+            for i in range(1, 56)
+        ] + [{"symbol": "BTCUSDT", "quoteVolume": "2000"}]
+        self.assertEqual(
+            ranked_usdt_perpetuals_by_quote_volume(exchange, tickers, 50, 10),
+            ["COIN51USDT", "COIN52USDT", "COIN53USDT", "COIN54USDT", "COIN55USDT"],
+        )
+
+    def test_only_active_usdt_perpetuals_are_ranked(self):
+        exchange = {"symbols": [
+            {"symbol": "AUSDT", "quoteAsset": "USDT", "contractType": "PERPETUAL", "status": "TRADING"},
+            {"symbol": "BBUSD", "quoteAsset": "BUSD", "contractType": "PERPETUAL", "status": "TRADING"},
+            {"symbol": "CUSDT", "quoteAsset": "USDT", "contractType": "CURRENT_QUARTER", "status": "TRADING"},
+            {"symbol": "DUSDT", "quoteAsset": "USDT", "contractType": "PERPETUAL", "status": "BREAK"},
+        ]}
+        tickers = [
+            {"symbol": "AUSDT", "quoteVolume": "100"},
+            {"symbol": "BBUSD", "quoteVolume": "1000"},
+            {"symbol": "CUSDT", "quoteVolume": "900"},
+            {"symbol": "DUSDT", "quoteVolume": "800"},
+        ]
+        self.assertEqual(
+            ranked_usdt_perpetuals_by_quote_volume(exchange, tickers, exclude_top=0),
+            ["AUSDT"],
+        )
+
+    def test_ignores_non_finite_quote_volume(self):
+        exchange = {"symbols": [
+            {"symbol": "AUSDT", "quoteAsset": "USDT", "contractType": "PERPETUAL", "status": "TRADING"}
+        ]}
+        self.assertEqual(
+            ranked_usdt_perpetuals_by_quote_volume(
+                exchange, [{"symbol": "AUSDT", "quoteVolume": "NaN"}], exclude_top=0
+            ),
+            [],
+        )
 
 
 class WebSocketClientTests(unittest.TestCase):
@@ -95,9 +63,7 @@ class WebSocketClientTests(unittest.TestCase):
         }}}
 
     def test_stream_url_contains_selected_streams(self):
-        client = KlineWebSocket(
-            KlineDataManager(), ["BTCUSDT", "ETHUSDT"], ["15m", "1h"]
-        )
+        client = KlineWebSocket(KlineDataManager(), ["BTCUSDT", "ETHUSDT"], ["15m", "1h"])
         self.assertIn("btcusdt@kline_15m", client.url)
         self.assertIn("ethusdt@kline_1h", client.url)
 
@@ -111,8 +77,17 @@ class WebSocketClientTests(unittest.TestCase):
         self.assertEqual(len(received), 1)
         self.assertEqual(len(manager.get("BTCUSDT", "15m")), 1)
 
+    def test_mark_price_stream_filters_requested_symbols(self):
+        received = []
+        client = MarkPriceWebSocket(["ALTUSDT"], received.append)
+        client._on_message(None, json.dumps({"stream": "!markPrice@arr@1s", "data": [
+            {"s": "ALTUSDT", "p": "1.25"},
+            {"s": "BTCUSDT", "p": "50000"},
+        ]}))
+        self.assertEqual(received, [{"ALTUSDT": 1.25}])
+        self.assertIn("!markPrice@arr@1s", client.url)
+
     def test_rejects_more_than_binance_combined_stream_limit(self):
-        # 342 symbols x 3 intervals would exceed 1024 streams.
         symbols = [f"COIN{i}USDT" for i in range(342)]
         with self.assertRaises(ValueError):
             KlineWebSocket(KlineDataManager(), symbols)
