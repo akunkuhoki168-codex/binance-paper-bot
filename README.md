@@ -6,11 +6,11 @@ SQLite-backed multi-position paper trader for Binance USDⓈ-M Futures.
 
 ## Market universe
 
-At startup, the bot reads CoinMarketCap market-cap rankings and intersects them with Binance USDⓈ-M exchange metadata. It monitors only active **USDT-quoted perpetual contracts** whose CoinMarketCap rank is **#51 or lower in rank position** (the top 50 are excluded).
+At startup, the bot reads CoinMarketCap market-cap rankings and intersects them with Binance USDⓈ-M exchange metadata. It monitors only active **USDT-quoted perpetual contracts** whose CoinMarketCap rank is **#51 or worse** (numerically greater than 50); the top 50 are excluded.
 
-The universe is refreshed each time the bot starts. If CoinMarketCap rankings cannot be loaded, the bot stops instead of falling back to BTC, ETH, or a fixed list. The default maximum is 200 matching contracts, ordered by market-cap rank.
+The universe is refreshed each time the bot starts. If CoinMarketCap rankings cannot be loaded, the bot stops instead of falling back to BTC, ETH, or a fixed list. The default scan covers ranks 51–2050 and monitors up to 200 matching contracts, ordered by market-cap rank.
 
-A CoinMarketCap API key is required for rankings. Create a key in your CoinMarketCap account, then add it as `CMC_API_KEY` in your Codespace secret or local `.env` file. This key is used only with CoinMarketCap; **do not add Binance API keys**.
+A CoinMarketCap API key is required for rankings. Create a key in your CoinMarketCap account, then add it as `CMC_API_KEY` in your Codespace secret or local `.env` file. This key is used only with CoinMarketCap; **do not add Binance API keys**. The default 2,000-row ranking request consumes approximately 2,000 API credits each time the bot starts; check the limits of your CoinMarketCap plan.
 
 ## Architecture
 
@@ -61,7 +61,7 @@ The runtime must remain running in its own terminal. The dashboard does not spaw
 |---|---:|---|
 | `CMC_API_KEY` | required | CoinMarketCap read-only market-cap ranking API key |
 | `CMC_RANK_START` | `51` | First eligible market-cap rank; keep at 51 to exclude the top 50 |
-| `CMC_RANK_LIMIT` | `5000` | Number of ranking positions requested from CoinMarketCap |
+| `CMC_RANK_LIMIT` | `2000` | Ranking positions requested (ranks 51–2050) |
 | `MAX_UNIVERSE_SYMBOLS` | `200` | Maximum matching Binance USDT perpetual contracts monitored |
 | `DB_PATH` | `data/paper_engine.sqlite3` | Shared SQLite database |
 | `STRATEGY_INTERVAL` | `15m` | HA interval: 15m, 1h, or 4h |
