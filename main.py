@@ -50,7 +50,7 @@ def main() -> None:
     engine = PaperEngine(DB_PATH, settings)
 
     def _handle_signal(*_args: object) -> None:
-        print("\\nShutdown requested; asking runtime to close positions safely.")
+        print("\nShutdown requested; asking runtime to close positions safely.")
         engine.set_bot_state("STOPPING")
 
     signal.signal(signal.SIGINT, _handle_signal)
