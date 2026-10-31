@@ -32,6 +32,7 @@ settings = PaperEngineSettings(
     taker_fee_rate=float(os.getenv("TAKER_FEE_RATE", "0.0005")),
     take_profit_usdt=float(os.getenv("TAKE_PROFIT_USDT", "10")),
     stop_loss_usdt=float(os.getenv("STOP_LOSS_USDT", "5")),
+    daily_loss_limit_usdt=float(os.getenv("DAILY_LOSS_LIMIT_USDT", "50")),
 )
 engine = PaperEngine(DB, settings)
 
@@ -108,5 +109,6 @@ try:
 except (sqlite3.Error, pd.errors.DatabaseError) as exc:
     st.warning(f"Could not read trades: {exc}")
 
+st.caption("Daily loss guard uses realized closed-trade PnL since 00:00 UTC. When the configured limit is reached, new entries are paused; open positions continue to be managed. Unrealized losses are not included in this daily guard.")
 st.caption("The runtime must be started separately with python main.py. Dashboard controls update SQLite state. Paper trading only.")
 engine.close()
