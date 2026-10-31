@@ -22,6 +22,7 @@ LEVERAGE = int(os.getenv("LEVERAGE", "10"))
 FEE = float(os.getenv("TAKER_FEE_RATE", "0.0005"))
 TP = float(os.getenv("TAKE_PROFIT_USDT", "10"))
 SL = float(os.getenv("STOP_LOSS_USDT", "5"))
+DAILY_LOSS_LIMIT = float(os.getenv("DAILY_LOSS_LIMIT_USDT", "50"))
 SYMBOLS = tuple(
     symbol.strip().upper()
     for symbol in os.getenv(
@@ -46,6 +47,7 @@ def main() -> None:
         taker_fee_rate=FEE,
         take_profit_usdt=TP,
         stop_loss_usdt=SL,
+        daily_loss_limit_usdt=DAILY_LOSS_LIMIT,
     )
     engine = PaperEngine(DB_PATH, settings)
 
