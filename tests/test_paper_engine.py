@@ -132,6 +132,41 @@ class PaperEngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.engine.open_position("BTCUSDT", "LONG", 0)
 
+    def test_fixed_allocation_capacity_drops_after_realized_loss(self):
+        for i in range(5):
+            self.engine.open_position(f"COIN{i}USDT", "LONG", 100)
+        self.engine.close_position("COIN0USDT", 97, reason="STOP_LOSS")
+
+        self.assertEqual(self.engine.snapshot()["active_positions"], 4)
+        self.assertEqual(self.engine.effective_position_capacity(), 4)
+        with self.assertRaisesRegex(ValueError, "effective position capacity is 4"):
+            self.engine.open_position("NEWUSDT", "LONG", 100)
+
+    def test_compounding_allocation_recalculates_after_realized_profit(self):
+        settings = PaperEngineSettings(
+            initial_capital=1000,
+            max_positions=5,
+            leverage=2,
+            allocation_mode="compounding",
+            taker_fee_rate=0.001,
+        )
+        engine = PaperEngine(os.path.join(self.tmp.name, "compounding.sqlite3"), settings)
+        try:
+            first = engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
+            first_budget = first.margin + first.entry_fee
+            engine.close_position("BTCUSDT", 110, now_ms=2_000)
+
+            expected_next_budget = engine.equity() / settings.max_positions
+            second = engine.open_position("ETHUSDT", "SHORT", 100, now_ms=3_000)
+
+            self.assertGreater(second.margin + second.entry_fee, first_budget)
+            self.assertAlmostEqual(
+                second.margin + second.entry_fee,
+                expected_next_budget,
+            )
+        finally:
+            engine.close()
+
     def test_fixed_allocation_does_not_silently_shrink_to_remaining_wallet(self):
         for i in range(4):
             self.engine.open_position(f"COIN{i}USDT", "LONG", 100)
