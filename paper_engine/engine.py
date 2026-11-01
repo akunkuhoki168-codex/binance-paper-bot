@@ -199,6 +199,27 @@ class PaperEngine:
         equity = self.equity()
         return max(0.0, equity / self.settings.max_positions)
 
+    def effective_position_capacity(self) -> int:
+        """Return the maximum active slots supportable by current free wallet.
+
+        Existing positions are never force-closed when losses reduce capacity.
+        The result counts those existing positions first, then adds only the
+        number of further full slot allocations currently affordable.
+        """
+        with self._lock:
+            active = len(self._positions)
+            maximum = self.settings.max_positions
+            if active >= maximum:
+                return maximum
+
+            slot_budget = self._allocation()
+            if not isfinite(slot_budget) or slot_budget <= 0:
+                return active
+
+            wallet = max(0.0, self._available_margin())
+            additional = max(0, int((wallet + 1e-9) / slot_budget))
+            return min(maximum, active + additional)
+
     def equity(self, marks: dict[str, float] | None = None) -> float:
         with self._lock:
             wallet = float(self._account()["wallet"])
@@ -244,7 +265,12 @@ class PaperEngine:
         with self._lock:
             if symbol in self._positions:
                 raise ValueError(f"{symbol} already has an open position")
-            if len(self._positions) >= self.settings.max_positions:
+            capacity = self.effective_position_capacity()
+            if len(self._positions) >= capacity:
+                if capacity < self.settings.max_positions:
+                    raise ValueError(
+                        f"insufficient free wallet; effective position capacity is {capacity}"
+                    )
                 raise ValueError("maximum active position count reached")
             if self.is_in_cooldown(symbol, now_ms):
                 raise ValueError(f"{symbol} is in take-profit cooldown")
