@@ -193,13 +193,13 @@ class PaperEngine:
     def _available_margin(self) -> float:
         return float(self._account()["wallet"])
 
-    def _allocation(self) -> float:
+    def _allocation(self, marks: dict[str, float] | None = None) -> float:
         if self.settings.allocation_mode == "fixed":
             return self.settings.initial_capital / self.settings.max_positions
-        equity = self.equity()
+        equity = self.equity(marks)
         return max(0.0, equity / self.settings.max_positions)
 
-    def effective_position_capacity(self) -> int:
+    def effective_position_capacity(self, marks: dict[str, float] | None = None) -> int:
         """Return the maximum active slots supportable by current free wallet.
 
         Existing positions are never force-closed when losses reduce capacity.
@@ -212,7 +212,7 @@ class PaperEngine:
             if active >= maximum:
                 return maximum
 
-            slot_budget = self._allocation()
+            slot_budget = self._allocation(marks)
             if not isfinite(slot_budget) or slot_budget <= 0:
                 return active
 
@@ -220,13 +220,24 @@ class PaperEngine:
             additional = max(0, int((wallet + 1e-9) / slot_budget))
             return min(maximum, active + additional)
 
+    @staticmethod
+    def _normalize_marks(marks: dict[str, float] | None) -> dict[str, float]:
+        normalized = {}
+        for symbol, price in (marks or {}).items():
+            if not isinstance(symbol, str) or not symbol.strip():
+                raise ValueError("mark-price symbols must be non-empty strings")
+            PaperEngine._validate_price(price)
+            normalized[symbol.strip().upper()] = price
+        return normalized
+
     def equity(self, marks: dict[str, float] | None = None) -> float:
         with self._lock:
+            mark_prices = self._normalize_marks(marks)
             wallet = float(self._account()["wallet"])
             locked = sum(p.margin for p in self._positions.values())
             unrealized = 0.0
             for symbol, position in self._positions.items():
-                mark = (marks or {}).get(symbol, position.entry_price)
+                mark = mark_prices.get(symbol, position.entry_price)
                 unrealized += self._gross_pnl(position, mark)
             return wallet + locked + unrealized
 
@@ -256,7 +267,8 @@ class PaperEngine:
             return bool(row and row["until_ms"] > now_ms)
 
     def open_position(self, symbol: str, side: Side, price: float,
-                      now_ms: int | None = None) -> PaperPosition:
+                      now_ms: int | None = None,
+                      marks: dict[str, float] | None = None) -> PaperPosition:
         symbol = symbol.strip().upper()
         self._validate_price(price)
         if not symbol or side not in ("LONG", "SHORT"):
@@ -265,7 +277,7 @@ class PaperEngine:
         with self._lock:
             if symbol in self._positions:
                 raise ValueError(f"{symbol} already has an open position")
-            capacity = self.effective_position_capacity()
+            capacity = self.effective_position_capacity(marks)
             if len(self._positions) >= capacity:
                 if capacity < self.settings.max_positions:
                     raise ValueError(
@@ -274,7 +286,7 @@ class PaperEngine:
                 raise ValueError("maximum active position count reached")
             if self.is_in_cooldown(symbol, now_ms):
                 raise ValueError(f"{symbol} is in take-profit cooldown")
-            slot_budget = self._allocation()
+            slot_budget = self._allocation(marks)
             margin = slot_budget / (1.0 + self.settings.leverage * self.settings.taker_fee_rate)
             if margin <= 0:
                 raise ValueError("no safe allocation available")
@@ -382,8 +394,121 @@ class PaperEngine:
             del self._positions[symbol]
             return net
 
+    def _close_and_reverse(
+        self,
+        symbol: str,
+        price: float,
+        opposite_side: Side,
+        now_ms: int,
+        marks: dict[str, float] | None = None,
+    ) -> tuple[float, bool]:
+        """Close a stopped position and, when safely funded, reverse atomically.
+
+        The close and replacement entry share one SQLite transaction. If the
+        replacement insert fails, the original position and account remain
+        unchanged. Insufficient free wallet commits only the close.
+        """
+        position = self._positions[symbol]
+        gross = self._gross_pnl(position, price)
+        exit_fee = position.quantity * price * self.settings.taker_fee_rate
+        net = gross - position.entry_fee - exit_fee + position.funding_net
+        wallet_after_close = (
+            float(self._account()["wallet"]) + position.margin + gross - exit_fee
+        )
+
+        remaining = {
+            key: value for key, value in self._positions.items() if key != symbol
+        }
+        mark_prices = self._normalize_marks(marks)
+        mark_prices[symbol] = price
+        if self.settings.allocation_mode == "fixed":
+            slot_budget = (
+                self.settings.initial_capital / self.settings.max_positions
+            )
+        else:
+            locked = sum(item.margin for item in remaining.values())
+            unrealized = sum(
+                self._gross_pnl(item, mark_prices.get(key, item.entry_price))
+                for key, item in remaining.items()
+            )
+            equity_after_close = wallet_after_close + locked + unrealized
+            slot_budget = max(
+                0.0, equity_after_close / self.settings.max_positions
+            )
+
+        can_reverse = (
+            len(remaining) < self.settings.max_positions
+            and isfinite(slot_budget)
+            and slot_budget > 0
+            and wallet_after_close + 1e-9 >= slot_budget
+        )
+        replacement = None
+        if can_reverse:
+            margin = slot_budget / (
+                1.0 + self.settings.leverage * self.settings.taker_fee_rate
+            )
+            entry_fee = slot_budget - margin
+            replacement = PaperPosition(
+                symbol=symbol,
+                side=opposite_side,
+                quantity=margin * self.settings.leverage / price,
+                entry_price=price,
+                margin=margin,
+                entry_fee=entry_fee,
+                funding_net=0.0,
+                opened_at=now_ms,
+            )
+
+        with self._db:
+            self._db.execute(
+                "UPDATE paper_account SET wallet=?, realized_pnl=realized_pnl+?, "
+                "fees_paid=fees_paid+? WHERE id=1",
+                (wallet_after_close, net, exit_fee),
+            )
+            self._db.execute(
+                "DELETE FROM paper_positions WHERE symbol=?", (symbol,)
+            )
+            self._db.execute(
+                "INSERT INTO paper_trades(symbol,side,action,quantity,price,fee,net_pnl,reason,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    symbol, position.side, "CLOSE", position.quantity, price,
+                    exit_fee, net, "STOP_LOSS", now_ms,
+                ),
+            )
+            if replacement is not None:
+                self._db.execute(
+                    "UPDATE paper_account SET wallet=wallet-?, fees_paid=fees_paid+? "
+                    "WHERE id=1",
+                    (replacement.margin + replacement.entry_fee, replacement.entry_fee),
+                )
+                self._db.execute(
+                    "INSERT INTO paper_positions VALUES(?,?,?,?,?,?,?,?)",
+                    (
+                        replacement.symbol, replacement.side, replacement.quantity,
+                        replacement.entry_price, replacement.margin,
+                        replacement.entry_fee, replacement.funding_net,
+                        replacement.opened_at,
+                    ),
+                )
+                self._db.execute(
+                    "INSERT INTO paper_trades(symbol,side,action,quantity,price,fee,net_pnl,reason,created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    (
+                        symbol, replacement.side, "OPEN", replacement.quantity,
+                        price, replacement.entry_fee, 0.0,
+                        "STOP_LOSS_REVERSAL", now_ms,
+                    ),
+                )
+
+        del self._positions[symbol]
+        if replacement is not None:
+            self._positions[symbol] = replacement
+        return net, replacement is not None
+
     def evaluate_exit(self, symbol: str, mark_price: float,
-                      now_ms: int | None = None) -> str | None:
+                      now_ms: int | None = None,
+                      marks: dict[str, float] | None = None) -> str | None:
         symbol = symbol.strip().upper()
         self._validate_price(mark_price)
 
@@ -404,16 +529,12 @@ class PaperEngine:
                 opposite_side = (
                     "SHORT" if position.side == "LONG" else "LONG"
                 )
-                self.close_position(
-                    symbol, mark_price, "STOP_LOSS", now_ms
+                _, reversed_position = self._close_and_reverse(
+                    symbol, mark_price, opposite_side,
+                    int(time.time() * 1000) if now_ms is None else now_ms,
+                    marks=marks,
                 )
-                try:
-                    self.open_position(
-                        symbol, opposite_side, mark_price, now_ms
-                    )
-                    return "STOP_LOSS_REVERSED"
-                except ValueError:
-                    return "STOP_LOSS"
+                return "STOP_LOSS_REVERSED" if reversed_position else "STOP_LOSS"
 
             return None
 

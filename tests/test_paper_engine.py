@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import unittest
 
@@ -166,6 +167,57 @@ class PaperEngineTests(unittest.TestCase):
             )
         finally:
             engine.close()
+
+    def test_compounding_allocation_uses_supplied_fresh_marks(self):
+        settings = PaperEngineSettings(
+            initial_capital=1000,
+            max_positions=5,
+            leverage=2,
+            allocation_mode="compounding",
+            taker_fee_rate=0.001,
+        )
+        engine = PaperEngine(os.path.join(self.tmp.name, "marked-compounding.sqlite3"), settings)
+        try:
+            engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
+            marks = {"btcusdt": 110.0}
+            expected_budget = engine.equity(marks) / settings.max_positions
+            second = engine.open_position(
+                "ETHUSDT", "SHORT", 100, now_ms=2_000, marks=marks
+            )
+            self.assertAlmostEqual(
+                second.margin + second.entry_fee, expected_budget
+            )
+        finally:
+            engine.close()
+
+    def test_stop_loss_reversal_is_atomic_when_replacement_insert_fails(self):
+        self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
+        before = self.engine.snapshot()
+        trade_count = self.engine._db.execute(
+            "SELECT COUNT(*) FROM paper_trades"
+        ).fetchone()[0]
+        self.engine._db.execute(
+            """
+            CREATE TRIGGER reject_short_reversal
+            BEFORE INSERT ON paper_positions
+            WHEN NEW.side = 'SHORT'
+            BEGIN
+                SELECT RAISE(ABORT, 'simulated replacement failure');
+            END;
+            """
+        )
+        self.engine._db.commit()
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "simulated replacement failure"):
+            self.engine.evaluate_exit("BTCUSDT", 97, now_ms=2_000)
+
+        after = self.engine.snapshot()
+        self.assertEqual(after["positions"]["BTCUSDT"]["side"], "LONG")
+        self.assertAlmostEqual(after["wallet"], before["wallet"])
+        self.assertEqual(
+            self.engine._db.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0],
+            trade_count,
+        )
 
     def test_fixed_allocation_does_not_silently_shrink_to_remaining_wallet(self):
         for i in range(4):
