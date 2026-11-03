@@ -76,14 +76,25 @@ class PaperEngineTests(unittest.TestCase):
         ).fetchone()[0]
         self.assertEqual(event_count, 0)
 
-    def test_restart_recovers_open_positions(self):
+    def test_restart_recovers_positions_and_pauses_previously_running_bot(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
+        self.engine.set_bot_state("RUNNING")
         self.engine.close()
         self.engine = PaperEngine(self.db, self.settings)
         snap = self.engine.snapshot()
         self.assertEqual(snap["active_positions"], 1)
         self.assertEqual(snap["positions"]["BTCUSDT"]["side"], "LONG")
         self.assertAlmostEqual(snap["positions"]["BTCUSDT"]["margin"], 200 / 1.002)
+        self.assertEqual(snap["bot_state"], "PAUSED")
+
+    def test_restart_preserves_stopping_state_for_safe_closeout(self):
+        self.engine.open_position("BTCUSDT", "LONG", 100)
+        self.engine.set_bot_state("STOPPING")
+        self.engine.close()
+        self.engine = PaperEngine(self.db, self.settings)
+        snap = self.engine.snapshot()
+        self.assertEqual(snap["active_positions"], 1)
+        self.assertEqual(snap["bot_state"], "STOPPING")
 
     def test_take_profit_closes_and_starts_persistent_cooldown(self):
         self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)

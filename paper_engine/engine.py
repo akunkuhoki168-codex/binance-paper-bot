@@ -136,6 +136,7 @@ class PaperEngine:
         self._db.commit()
         self._positions: dict[str, PaperPosition] = {}
         self._recover_positions()
+        self._recover_bot_state(now)
 
     def _recover_positions(self):
         rows = self._db.execute("SELECT * FROM paper_positions").fetchall()
@@ -147,6 +148,25 @@ class PaperEngine:
                 opened_at=row["opened_at"],
             ) for row in rows
         }
+
+    def _recover_bot_state(self, now_ms: int | None = None) -> None:
+        """Pause new entries after an unexpected process restart.
+
+        Persisted positions are recovered separately. A STOPPING state is
+        deliberately preserved so the runtime can retry its close-out
+        procedure once fresh public mark prices are available.
+        """
+        now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+        with self._lock:
+            row = self._db.execute(
+                "SELECT state FROM bot_control WHERE id=1"
+            ).fetchone()
+            if row and row["state"] == "RUNNING":
+                self._db.execute(
+                    "UPDATE bot_control SET state='PAUSED', updated_at=? WHERE id=1",
+                    (now_ms,),
+                )
+                self._db.commit()
 
     def close(self):
         with self._lock:
