@@ -120,6 +120,16 @@ class RuntimeControlTests(unittest.TestCase):
         )
 
     def test_runtime_stop_loss_leaves_position_flat_when_reversal_is_unaffordable(self):
+        # Use the already-tested fee rate that permits five exact fixed slots
+        # without a floating-point wallet remainder blocking the fifth entry.
+        self.engine.settings = PaperEngineSettings(
+            initial_capital=1000,
+            max_positions=5,
+            leverage=2,
+            taker_fee_rate=0.001,
+            take_profit_usdt=10,
+            stop_loss_usdt=10,
+        )
         for index in range(5):
             self.engine.open_position(f"COIN{index}USDT", "LONG", 100, now_ms=1_000)
         with patch.object(
