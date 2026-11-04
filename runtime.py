@@ -213,20 +213,18 @@ class FuturesPaperRuntime:
             mark = marks.get(symbol)
             if mark is None:
                 continue
-            net = self.engine.position_net_pnl(symbol, mark)
-            decision = self.strategy.evaluate_position(
-                symbol, position["side"], net
-            )
-            if decision.action == "CLOSE_TAKE_PROFIT":
-                self.engine.close_position(symbol, mark, reason="TAKE_PROFIT")
-                print(f" PAPER TP {symbol} @ {mark:.8g}; net={net:.4f} USDT")
-            elif decision.action == "CLOSE_AND_REVERSE":
-                self.engine.close_position(symbol, mark, reason="STOP_LOSS")
-                try:
-                    self.engine.open_position(symbol, decision.side, mark)
-                    print(f" PAPER SL-REVERSE {symbol} {decision.side} @ {mark:.8g}")
-                except ValueError as exc:
-                    self.last_error = f"{symbol}: stopped flat; reversal skipped: {exc}"
+            result = self.engine.evaluate_exit(symbol, mark, marks=marks)
+            if result == "TAKE_PROFIT":
+                print(f" PAPER TP {symbol} @ {mark:.8g}")
+            elif result == "STOP_LOSS_REVERSED":
+                opposite_side = "SHORT" if position["side"] == "LONG" else "LONG"
+                print(f" PAPER SL-REVERSE {symbol} {opposite_side} @ {mark:.8g}")
+            elif result == "STOP_LOSS":
+                self.last_error = (
+                    f"{symbol}: stop-loss closed the position; reversal skipped "
+                    "because the paper wallet cannot safely fund the replacement"
+                )
+                print(f" PAPER SL {symbol} @ {mark:.8g}; reversal skipped")
 
     def _close_all_and_verify(self) -> bool:
         positions = self.engine.snapshot()["positions"]

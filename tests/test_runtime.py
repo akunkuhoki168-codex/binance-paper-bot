@@ -77,19 +77,60 @@ class RuntimeControlTests(unittest.TestCase):
         fetch.assert_called_once_with("BTCUSDT", 1_000)
         self.assertAlmostEqual(self.engine.snapshot()["funding_net"], -0.39960039960039967)
 
-    def test_funding_api_outage_does_not_block_position_management(self):
+    def test_funding_api_outage_does_not_block_engine_tp_management(self):
         import requests
         self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
-        decision = SimpleNamespace(action="CLOSE_TAKE_PROFIT")
         with patch.object(
             self.runtime.funding_client, "funding_events",
             side_effect=requests.ConnectionError("temporary outage"),
-        ), patch.object(self.runtime, "refresh_marks", return_value={"BTCUSDT": 101}), patch.object(
-            self.runtime.strategy, "evaluate_position", return_value=decision
+        ), patch.object(
+            self.runtime, "refresh_marks", return_value={"BTCUSDT": 103}
+        ), patch.object(
+            self.runtime.strategy, "evaluate_position",
+            side_effect=AssertionError("HA strategy must not manage engine TP/SL"),
         ):
             self.runtime._manage_positions()
         self.assertEqual(self.engine.snapshot()["active_positions"], 0)
+        self.assertTrue(self.engine.is_in_cooldown("BTCUSDT"))
         self.assertIn("funding update unavailable", self.runtime.last_error)
+
+    def test_runtime_stop_loss_uses_atomic_engine_reversal(self):
+        self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
+        with patch.object(
+            self.runtime, "refresh_marks", return_value={"BTCUSDT": 97}
+        ), patch.object(
+            self.engine, "open_position", wraps=self.engine.open_position
+        ) as separate_open:
+            self.runtime._manage_positions()
+            separate_open.assert_not_called()
+
+        snapshot = self.engine.snapshot()
+        self.assertEqual(snapshot["active_positions"], 1)
+        self.assertEqual(snapshot["positions"]["BTCUSDT"]["side"], "SHORT")
+        trades = self.engine._db.execute(
+            "SELECT action, reason FROM paper_trades ORDER BY id"
+        ).fetchall()
+        self.assertEqual(
+            [(row["action"], row["reason"]) for row in trades],
+            [
+                ("OPEN", "SIGNAL"),
+                ("CLOSE", "STOP_LOSS"),
+                ("OPEN", "STOP_LOSS_REVERSAL"),
+            ],
+        )
+
+    def test_runtime_stop_loss_leaves_position_flat_when_reversal_is_unaffordable(self):
+        for index in range(5):
+            self.engine.open_position(f"COIN{index}USDT", "LONG", 100, now_ms=1_000)
+        with patch.object(
+            self.runtime, "refresh_marks", return_value={"COIN0USDT": 97}
+        ):
+            self.runtime._manage_positions()
+
+        snapshot = self.engine.snapshot()
+        self.assertEqual(snapshot["active_positions"], 4)
+        self.assertNotIn("COIN0USDT", snapshot["positions"])
+        self.assertIn("reversal skipped", self.runtime.last_error)
 
     def test_daily_realized_loss_guard_uses_utc_day(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
