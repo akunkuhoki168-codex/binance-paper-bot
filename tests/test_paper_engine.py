@@ -240,5 +240,61 @@ class PaperEngineTests(unittest.TestCase):
             self.engine.open_position("SIXTHUSDT", "LONG", 100)
 
 
+    def test_restart_recovers_all_five_positions_and_funding_events(self):
+        sides = {
+            "COIN0USDT": "LONG",
+            "COIN1USDT": "SHORT",
+            "COIN2USDT": "LONG",
+            "COIN3USDT": "SHORT",
+            "COIN4USDT": "LONG",
+        }
+        funding_times = {}
+        for index, (symbol, side) in enumerate(sides.items()):
+            opened_at = 1_000 + index
+            funding_time = 2_000 + index
+            self.engine.open_position(symbol, side, 100, now_ms=opened_at)
+            self.engine.apply_funding(
+                symbol, 0.0001, 100, funding_time_ms=funding_time
+            )
+            funding_times[symbol] = funding_time
+
+        before = self.engine.snapshot()
+        self.engine.set_bot_state("RUNNING")
+        self.engine.close()
+        self.engine = PaperEngine(self.db, self.settings)
+
+        after = self.engine.snapshot()
+        self.assertEqual(after["active_positions"], 5)
+        self.assertEqual(set(after["positions"]), set(sides))
+        self.assertEqual(after["bot_state"], "PAUSED")
+        for field in ("wallet", "realized_pnl", "fees_paid", "funding_net", "equity"):
+            self.assertAlmostEqual(after[field], before[field])
+        for symbol, side in sides.items():
+            self.assertEqual(after["positions"][symbol]["side"], side)
+            for field in (
+                "quantity", "entry_price", "margin", "entry_fee", "funding_net"
+            ):
+                self.assertAlmostEqual(
+                    after["positions"][symbol][field],
+                    before["positions"][symbol][field],
+                )
+            self.assertEqual(
+                self.engine.last_funding_time(symbol), funding_times[symbol]
+            )
+
+        # The persisted event key prevents a funding payment from being
+        # applied twice if the process restarts and polls the same settlement.
+        self.assertEqual(
+            self.engine.apply_funding(
+                "COIN0USDT", 0.0001, 100,
+                funding_time_ms=funding_times["COIN0USDT"],
+            ),
+            0.0,
+        )
+        self.assertAlmostEqual(
+            self.engine.snapshot()["funding_net"], before["funding_net"]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
