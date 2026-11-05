@@ -253,10 +253,14 @@ class PaperEngineTests(unittest.TestCase):
             opened_at = 1_000 + index
             funding_time = 2_000 + index
             self.engine.open_position(symbol, side, 100, now_ms=opened_at)
-            self.engine.apply_funding(
-                symbol, 0.0001, 100, funding_time_ms=funding_time
-            )
             funding_times[symbol] = funding_time
+
+        # Open all five fixed-allocation slots before applying any funding
+        # cash flow; a paid funding event can reduce the free wallet.
+        for symbol in sides:
+            self.engine.apply_funding(
+                symbol, 0.0001, 100, funding_time_ms=funding_times[symbol]
+            )
 
         before = self.engine.snapshot()
         self.engine.set_bot_state("RUNNING")
@@ -294,7 +298,6 @@ class PaperEngineTests(unittest.TestCase):
         self.assertAlmostEqual(
             self.engine.snapshot()["funding_net"], before["funding_net"]
         )
-
 
 if __name__ == "__main__":
     unittest.main()
