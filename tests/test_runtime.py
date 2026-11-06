@@ -142,16 +142,37 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertNotIn("COIN0USDT", snapshot["positions"])
         self.assertIn("reversal skipped", self.runtime.last_error)
 
-    def test_daily_realized_loss_guard_uses_utc_day(self):
-        self.engine.open_position("BTCUSDT", "LONG", 100)
-        self.engine.close_position("BTCUSDT", 90)
+    def test_daily_realized_loss_does_not_auto_pause_runtime(self):
+        self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
+        self.engine.close_position("BTCUSDT", 90, now_ms=2_000)
         self.engine.settings = PaperEngineSettings(
             initial_capital=1000, max_positions=5, leverage=2,
             take_profit_usdt=10, stop_loss_usdt=10, daily_loss_limit_usdt=1,
         )
-        with patch("runtime.datetime") as clock:
-            clock.now.return_value = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
-            self.assertTrue(self.runtime._daily_realized_loss_reached())
+        self.engine.set_bot_state("RUNNING")
+
+        class StopAfterOneIteration:
+            def __init__(self):
+                self.stopped = False
+
+            def is_set(self):
+                return self.stopped
+
+            def wait(self, timeout):
+                self.stopped = True
+
+            def set(self):
+                self.stopped = True
+
+        self.runtime._stop = StopAfterOneIteration()
+        with patch.object(self.runtime, "bootstrap"), \\
+             patch.object(self.runtime, "start_feed"), \\
+             patch.object(self.runtime, "stop_feed"), \\
+             patch.object(self.runtime, "_manage_positions") as manage_positions:
+            self.runtime.run()
+
+        manage_positions.assert_called_once()
+        self.assertEqual(self.engine.get_bot_state(), "RUNNING")
 
     def test_invalid_symbol_list_is_rejected(self):
         with self.assertRaises(ValueError):
