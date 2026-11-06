@@ -165,10 +165,12 @@ class RuntimeControlTests(unittest.TestCase):
                 self.stopped = True
 
         self.runtime._stop = StopAfterOneIteration()
-        with patch.object(self.runtime, "bootstrap"), \\
-             patch.object(self.runtime, "start_feed"), \\
-             patch.object(self.runtime, "stop_feed"), \\
-             patch.object(self.runtime, "_manage_positions") as manage_positions:
+        with (
+            patch.object(self.runtime, "bootstrap"),
+            patch.object(self.runtime, "start_feed"),
+            patch.object(self.runtime, "stop_feed"),
+            patch.object(self.runtime, "_manage_positions") as manage_positions,
+        ):
             self.runtime.run()
 
         manage_positions.assert_called_once()
