@@ -155,11 +155,13 @@ class FuturesPaperRuntime:
         """Return per-symbol mark-price freshness without using cached prices."""
         now = time.monotonic()
         max_age = self._max_mark_age_seconds()
+        position_symbols = set(self.engine.snapshot()["positions"])
         with self._lock:
             symbols = sorted(
                 set(self.symbols)
                 | set(self._mark_updated_at)
                 | set(self._market_data_errors)
+                | position_symbols
             )
             health = {}
             for symbol in symbols:
@@ -282,10 +284,14 @@ class FuturesPaperRuntime:
                 print(f" PAPER SL {symbol} @ {mark:.8g}; reversal skipped")
 
         if stale_symbols:
-            self.last_error = (
+            stale_message = (
                 f"Market data stale/missing for {', '.join(sorted(stale_symbols))}; "
                 "TP/SL monitoring skipped for those positions."
             )
+            # Preserve a more actionable execution/funding error while the
+            # per-symbol health report independently exposes stale market data.
+            if not self.last_error or self.last_error.startswith("Market data stale/missing for "):
+                self.last_error = stale_message
         elif self.last_error and self.last_error.startswith("Market data stale/missing for "):
             self.last_error = None
 

@@ -105,6 +105,12 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual(health["status"], "HEALTHY")
         self.assertIsNone(health["last_error"])
 
+    def test_market_data_health_includes_open_positions_outside_configured_symbols(self):
+        self.engine.open_position("ALTUSDT", "SHORT", 10)
+        health = self.runtime.market_data_health()
+        self.assertEqual(health["ALTUSDT"]["status"], "STALE")
+        self.assertIn("no successful mark-price update", health["ALTUSDT"]["last_error"])
+
     def test_missing_mark_response_marks_position_stale_and_skips_tp_sl(self):
         self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
         self.runtime._marks = {"BTCUSDT": 105.0}
