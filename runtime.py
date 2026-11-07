@@ -70,6 +70,8 @@ class FuturesPaperRuntime:
         self._feed: KlineWebSocket | None = None
         self._marks: dict[str, float] = {}
         self._mark_updated_at: dict[str, float] = {}
+        self._market_data_errors: dict[str, str] = {}
+        self._last_mark_poll_error: str | None = None
         self._lock = threading.RLock()
         self.last_error: str | None = None
 
@@ -102,29 +104,86 @@ class FuturesPaperRuntime:
 
     def refresh_marks(self) -> dict[str, float]:
         """Fetch public mark prices; never uses authenticated endpoints."""
-        response = requests.get(
-            "https://fapi.binance.com/fapi/v1/premiumIndex",
-            timeout=10,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        rows = payload if isinstance(payload, list) else [payload]
-        wanted = set(self.symbols)
-        updated = {}
-        for row in rows:
-            symbol = str(row.get("symbol", "")).upper()
-            if symbol in wanted:
-                price = float(row["markPrice"])
-                if isfinite(price) and price > 0:
-                    updated[symbol] = price
-        # Return only marks from this response. Cached marks may be stale and
-        # must never be used to close or manage a position after a data outage.
+        try:
+            response = requests.get(
+                "https://fapi.binance.com/fapi/v1/premiumIndex",
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            rows = payload if isinstance(payload, list) else [payload]
+            wanted = set(self.symbols)
+            updated = {}
+            for row in rows:
+                symbol = str(row.get("symbol", "")).upper()
+                if symbol in wanted:
+                    price = float(row["markPrice"])
+                    if isfinite(price) and price > 0:
+                        updated[symbol] = price
+        except (
+            requests.RequestException,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+        ) as exc:
+            with self._lock:
+                self._last_mark_poll_error = f"{type(exc).__name__}: {exc}"
+            raise
+
+        # Return only marks from this response. Cached marks are retained for
+        # display/diagnostics but are never substituted for a missing response
+        # row when managing an open position.
         with self._lock:
             self._marks.update(updated)
             received_at = time.monotonic()
-            for symbol in updated:
-                self._mark_updated_at[symbol] = received_at
+            self._last_mark_poll_error = None
+            for symbol in self.symbols:
+                if symbol in updated:
+                    self._mark_updated_at[symbol] = received_at
+                    self._market_data_errors.pop(symbol, None)
+                else:
+                    self._market_data_errors[symbol] = (
+                        "missing from latest public mark-price response"
+                    )
             return dict(updated)
+
+    def _max_mark_age_seconds(self) -> float:
+        return max(10.0, self.mark_poll_seconds * 3)
+
+    def market_data_health(self) -> dict[str, dict]:
+        """Return per-symbol mark-price freshness without using cached prices."""
+        now = time.monotonic()
+        max_age = self._max_mark_age_seconds()
+        with self._lock:
+            symbols = sorted(
+                set(self.symbols)
+                | set(self._mark_updated_at)
+                | set(self._market_data_errors)
+            )
+            health = {}
+            for symbol in symbols:
+                updated_at = self._mark_updated_at.get(symbol)
+                age = None if updated_at is None else max(0.0, now - updated_at)
+                reason = self._market_data_errors.get(symbol)
+                stale = (
+                    updated_at is None
+                    or age is None
+                    or age > max_age
+                    or reason is not None
+                )
+                if stale and reason is None:
+                    if self._last_mark_poll_error:
+                        reason = f"last mark-price poll failed: {self._last_mark_poll_error}"
+                    else:
+                        reason = "no successful mark-price update within freshness window"
+                health[symbol] = {
+                    "status": "STALE" if stale else "HEALTHY",
+                    "age_seconds": age,
+                    "max_age_seconds": max_age,
+                    "last_error": reason,
+                }
+            return health
 
     def _on_closed_candle(self, candle: FuturesCandle) -> None:
         if self.engine.get_bot_state() != "RUNNING":
@@ -147,13 +206,12 @@ class FuturesPaperRuntime:
             position_side=position["side"] if position else None,
         )
         if decision.action in ("OPEN_LONG", "OPEN_SHORT") and decision.side:
+            symbol_health = self.market_data_health().get(candle.symbol)
+            marks_are_fresh = (
+                symbol_health is not None
+                and symbol_health["status"] == "HEALTHY"
+            )
             with self._lock:
-                mark_time = self._mark_updated_at.get(candle.symbol, 0.0)
-                marks_are_fresh = (
-                    mark_time > 0
-                    and time.monotonic() - mark_time
-                    <= max(10.0, self.mark_poll_seconds * 3)
-                )
                 mark = self._marks.get(candle.symbol) if marks_are_fresh else None
             if mark is None:
                 self.last_error = (
@@ -198,9 +256,17 @@ class FuturesPaperRuntime:
         self._sync_funding()
         marks = self.refresh_marks()
         positions = self.engine.snapshot()["positions"]
+        health = self.market_data_health()
+        stale_symbols = []
         for symbol, position in positions.items():
             mark = marks.get(symbol)
-            if mark is None:
+            symbol_health = health.get(symbol)
+            if (
+                mark is None
+                or symbol_health is None
+                or symbol_health["status"] != "HEALTHY"
+            ):
+                stale_symbols.append(symbol)
                 continue
             result = self.engine.evaluate_exit(symbol, mark, marks=marks)
             if result == "TAKE_PROFIT":
@@ -214,6 +280,14 @@ class FuturesPaperRuntime:
                     "because the paper wallet cannot safely fund the replacement"
                 )
                 print(f" PAPER SL {symbol} @ {mark:.8g}; reversal skipped")
+
+        if stale_symbols:
+            self.last_error = (
+                f"Market data stale/missing for {', '.join(sorted(stale_symbols))}; "
+                "TP/SL monitoring skipped for those positions."
+            )
+        elif self.last_error and self.last_error.startswith("Market data stale/missing for "):
+            self.last_error = None
 
     def _close_all_and_verify(self) -> bool:
         positions = self.engine.snapshot()["positions"]

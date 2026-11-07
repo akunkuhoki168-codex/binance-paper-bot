@@ -32,6 +32,16 @@ class RuntimeControlTests(unittest.TestCase):
         self.engine.close()
         self.tmp.cleanup()
 
+    def _publish_fresh_marks(self, marks):
+        received_at = time.monotonic()
+        with self.runtime._lock:
+            self.runtime._marks.update(marks)
+            for symbol in marks:
+                self.runtime._mark_updated_at[symbol] = received_at
+                self.runtime._market_data_errors.pop(symbol, None)
+            self.runtime._last_mark_poll_error = None
+        return dict(marks)
+
     def test_stop_closes_positions_using_current_marks(self):
         self.engine.open_position("BTCUSDT", "LONG", 100)
         with patch.object(self.runtime, "refresh_marks", return_value={"BTCUSDT": 101}):
@@ -67,6 +77,56 @@ class RuntimeControlTests(unittest.TestCase):
         position = self.engine.snapshot()["positions"]["BTCUSDT"]
         self.assertEqual(position["entry_price"], 105.0)
 
+    def test_entry_rejects_expired_cached_mark(self):
+        self.engine.set_bot_state("RUNNING")
+        self.runtime._marks = {"BTCUSDT": 105.0}
+        self.runtime._mark_updated_at = {
+            "BTCUSDT": time.monotonic() - self.runtime._max_mark_age_seconds() - 1
+        }
+        decision = SimpleNamespace(action="OPEN_LONG", side="LONG")
+        candle = SimpleNamespace(symbol="BTCUSDT", interval="15m", close=100)
+        with patch.object(self.runtime.strategy, "on_closed_candles", return_value=decision):
+            self.runtime._on_closed_candle(candle)
+        self.assertEqual(self.engine.snapshot()["active_positions"], 0)
+        self.assertEqual(self.runtime.market_data_health()["BTCUSDT"]["status"], "STALE")
+
+    def test_mark_health_recovers_after_fresh_public_response(self):
+        self.runtime._mark_updated_at["BTCUSDT"] = time.monotonic() - 30
+        self.runtime._market_data_errors["BTCUSDT"] = (
+            "missing from latest public mark-price response"
+        )
+        response = SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: [{"symbol": "BTCUSDT", "markPrice": "101.25"}],
+        )
+        with patch("runtime.requests.get", return_value=response):
+            self.assertEqual(self.runtime.refresh_marks(), {"BTCUSDT": 101.25})
+        health = self.runtime.market_data_health()["BTCUSDT"]
+        self.assertEqual(health["status"], "HEALTHY")
+        self.assertIsNone(health["last_error"])
+
+    def test_missing_mark_response_marks_position_stale_and_skips_tp_sl(self):
+        self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
+        self.runtime._marks = {"BTCUSDT": 105.0}
+        self.runtime._mark_updated_at = {"BTCUSDT": time.monotonic()}
+        response = SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: [{"symbol": "ETHUSDT", "markPrice": "2000"}],
+        )
+        with (
+            patch.object(self.runtime, "_sync_funding"),
+            patch("runtime.requests.get", return_value=response),
+            patch.object(self.engine, "evaluate_exit") as evaluate_exit,
+        ):
+            self.runtime._manage_positions()
+
+        evaluate_exit.assert_not_called()
+        health = self.runtime.market_data_health()["BTCUSDT"]
+        self.assertEqual(health["status"], "STALE")
+        self.assertIn("missing from latest", health["last_error"])
+        self.assertIn("TP/SL monitoring skipped", self.runtime.last_error)
+        self.assertEqual(self.runtime._marks["BTCUSDT"], 105.0)
+
     def test_funding_events_are_applied_and_duplicate_poll_is_avoided(self):
         from market_data.funding import FundingEvent
         self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
@@ -84,7 +144,8 @@ class RuntimeControlTests(unittest.TestCase):
             self.runtime.funding_client, "funding_events",
             side_effect=requests.ConnectionError("temporary outage"),
         ), patch.object(
-            self.runtime, "refresh_marks", return_value={"BTCUSDT": 103}
+            self.runtime, "refresh_marks",
+            side_effect=lambda: self._publish_fresh_marks({"BTCUSDT": 103}),
         ), patch.object(
             self.runtime.strategy, "evaluate_position",
             side_effect=AssertionError("HA strategy must not manage engine TP/SL"),
@@ -97,7 +158,8 @@ class RuntimeControlTests(unittest.TestCase):
     def test_runtime_stop_loss_uses_atomic_engine_reversal(self):
         self.engine.open_position("BTCUSDT", "LONG", 100, now_ms=1_000)
         with patch.object(
-            self.runtime, "refresh_marks", return_value={"BTCUSDT": 97}
+            self.runtime, "refresh_marks",
+            side_effect=lambda: self._publish_fresh_marks({"BTCUSDT": 97}),
         ), patch.object(
             self.engine, "open_position", wraps=self.engine.open_position
         ) as separate_open:
@@ -133,7 +195,8 @@ class RuntimeControlTests(unittest.TestCase):
         for index in range(5):
             self.engine.open_position(f"COIN{index}USDT", "LONG", 100, now_ms=1_000)
         with patch.object(
-            self.runtime, "refresh_marks", return_value={"COIN0USDT": 97}
+            self.runtime, "refresh_marks",
+            side_effect=lambda: self._publish_fresh_marks({"COIN0USDT": 97}),
         ):
             self.runtime._manage_positions()
 
