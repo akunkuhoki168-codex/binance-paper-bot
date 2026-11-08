@@ -56,6 +56,22 @@ class WebSocketCallbackTests(unittest.TestCase):
         self.assertEqual(stream["status"], "HEALTHY")
         self.assertEqual(stream["age_seconds"], 4.0)
 
+    def test_reconnect_starts_a_new_stream_freshness_grace_period(self):
+        self.feed._on_open(None)
+        candle = SimpleNamespace(symbol="BTCUSDT", interval="15m")
+        with patch.object(self.feed, "manager_packet", return_value=(candle, False)):
+            with patch("market_data.websocket.time.monotonic", return_value=100.0):
+                self.feed._on_message(None, "{}")
+        with patch("market_data.websocket.time.monotonic", return_value=120.0):
+            self.assertEqual(self.feed.health(15)["status"], "STALE")
+
+        with patch("market_data.websocket.time.monotonic", return_value=121.0):
+            self.feed._on_open(None)
+        with patch("market_data.websocket.time.monotonic", return_value=122.0):
+            health = self.feed.health(15)
+        self.assertEqual(health["status"], "HEALTHY")
+        self.assertEqual(health["streams"]["BTCUSDT:15m"]["age_seconds"], 1.0)
+
     def test_stale_connection_can_be_forced_into_reconnect_loop_once(self):
         self.feed._on_open(None)
         app = Mock()

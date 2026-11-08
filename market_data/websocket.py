@@ -67,6 +67,8 @@ class KlineWebSocket:
                 return
             self._connection_state = "CONNECTED"
             self._connected_at = time.monotonic()
+            # Start a new freshness grace period after every successful reconnect.
+            self._last_message_at.clear()
             self._connection_count += 1
             self._last_error = None
 
