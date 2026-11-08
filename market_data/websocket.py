@@ -38,6 +38,15 @@ class KlineWebSocket:
         self.ping_timeout = ping_timeout
         self._stop = threading.Event()
         self._app = None
+        self._state_lock = threading.RLock()
+        self._connection_state = "DISCONNECTED"
+        self._connected_at: float | None = None
+        self._last_message_at: dict[tuple[str, str], float] = {}
+        self._last_error: str | None = None
+        self._last_close_code = None
+        self._last_close_reason: str | None = None
+        self._connection_count = 0
+        self._stale_reconnect_count = 0
 
     @property
     def url(self) -> str:
@@ -45,14 +54,112 @@ class KlineWebSocket:
 
     def stop(self) -> None:
         self._stop.set()
-        app = self._app
+        with self._state_lock:
+            self._connection_state = "STOPPED"
+            app = self._app
         if app is not None:
             app.close()
+
+    def _on_open(self, _ws) -> None:
+        with self._state_lock:
+            if self._stop.is_set():
+                self._connection_state = "STOPPED"
+                return
+            self._connection_state = "CONNECTED"
+            self._connected_at = time.monotonic()
+            self._connection_count += 1
+            self._last_error = None
+
+    def _on_error(self, _ws, error) -> None:
+        with self._state_lock:
+            self._last_error = f"{type(error).__name__}: {error}"
+            self._connection_state = (
+                "STOPPED" if self._stop.is_set() else "DISCONNECTED"
+            )
+
+    def _on_close(self, _ws, close_status_code=None, close_msg=None) -> None:
+        with self._state_lock:
+            self._last_close_code = close_status_code
+            self._last_close_reason = (
+                close_msg.decode("utf-8", errors="replace")
+                if isinstance(close_msg, bytes)
+                else str(close_msg) if close_msg is not None else None
+            )
+            self._connection_state = (
+                "STOPPED" if self._stop.is_set() else "DISCONNECTED"
+            )
+
+    def health(self, max_age_seconds: float = 15.0) -> dict:
+        """Return connection and per-symbol/timeframe feed freshness."""
+        if not isinstance(max_age_seconds, (int, float)) or max_age_seconds <= 0:
+            raise ValueError("max_age_seconds must be positive")
+        now = time.monotonic()
+        with self._state_lock:
+            state = self._connection_state
+            streams = {}
+            for stream in self.streams:
+                symbol, interval = stream.split("@kline_", 1)
+                last_seen = self._last_message_at.get((symbol.upper(), interval))
+                reference = last_seen if last_seen is not None else self._connected_at
+                age = None if reference is None else max(0.0, now - reference)
+                if self._stop.is_set():
+                    stream_status = "STOPPED"
+                elif state == "CONNECTED":
+                    stream_status = (
+                        "STALE" if age is None or age > max_age_seconds else "HEALTHY"
+                    )
+                else:
+                    stream_status = state
+                streams[f"{symbol.upper()}:{interval}"] = {
+                    "status": stream_status,
+                    "age_seconds": age,
+                    "max_age_seconds": float(max_age_seconds),
+                }
+
+            if self._stop.is_set():
+                status = "STOPPED"
+            elif state == "CONNECTED":
+                status = (
+                    "STALE"
+                    if any(item["status"] == "STALE" for item in streams.values())
+                    else "HEALTHY"
+                )
+            else:
+                status = state
+
+            return {
+                "status": status,
+                "connection_state": "STOPPED" if self._stop.is_set() else state,
+                "last_error": self._last_error,
+                "last_close_code": self._last_close_code,
+                "last_close_reason": self._last_close_reason,
+                "reconnect_count": max(0, self._connection_count - 1),
+                "stale_reconnect_count": self._stale_reconnect_count,
+                "streams": streams,
+            }
+
+    def request_reconnect(self, reason: str = "feed freshness threshold exceeded") -> bool:
+        """Close a stale connection so run_forever() enters its reconnect loop."""
+        with self._state_lock:
+            if (
+                self._stop.is_set()
+                or self._connection_state != "CONNECTED"
+                or self._app is None
+            ):
+                return False
+            app = self._app
+            self._connection_state = "RECONNECTING"
+            self._stale_reconnect_count += 1
+            self._last_error = str(reason)
+        app.close()
+        return True
 
     def _on_message(self, _ws, message: str) -> None:
         try:
             packet = json.loads(message)
             candle, closed = self.manager_packet(packet)
+            with self._state_lock:
+                self._last_message_at[(candle.symbol, candle.interval)] = time.monotonic()
             if closed and self.on_candle is not None:
                 try:
                     self.on_candle(candle)
@@ -60,7 +167,7 @@ class KlineWebSocket:
                     # A strategy/engine callback failure must not kill the
                     # market-data receive loop. Keep the feed alive and report it.
                     print(f"Closed-candle callback error: {exc}")
-        except (ValueError, TypeError, KeyError):
+        except (ValueError, TypeError, KeyError, AttributeError):
             # Ignore malformed market-data messages; the connection remains alive.
             return
 
@@ -76,11 +183,17 @@ class KlineWebSocket:
         import websocket
 
         while not self._stop.is_set():
+            with self._state_lock:
+                self._connection_state = "CONNECTING"
             app = websocket.WebSocketApp(
                 self.url,
+                on_open=self._on_open,
                 on_message=self._on_message,
+                on_error=self._on_error,
+                on_close=self._on_close,
             )
-            self._app = app
+            with self._state_lock:
+                self._app = app
             try:
                 app.run_forever(
                     ping_interval=self.ping_interval,
@@ -90,6 +203,11 @@ class KlineWebSocket:
                 # A transient network failure should not terminate the feed loop.
                 pass
             finally:
-                self._app = None
+                with self._state_lock:
+                    self._app = None
+                    if self._stop.is_set():
+                        self._connection_state = "STOPPED"
+                    elif self._connection_state != "DISCONNECTED":
+                        self._connection_state = "DISCONNECTED"
             if not self._stop.is_set():
                 self._stop.wait(self.reconnect_seconds)

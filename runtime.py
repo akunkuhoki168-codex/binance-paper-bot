@@ -187,6 +187,44 @@ class FuturesPaperRuntime:
                 }
             return health
 
+    def _max_websocket_age_seconds(self) -> float:
+        return max(15.0, self.mark_poll_seconds * 5)
+
+    def websocket_health(self) -> dict:
+        """Expose WebSocket connection and per-symbol/timeframe freshness."""
+        if self._feed is None:
+            return {
+                "status": "NOT_STARTED",
+                "connection_state": "NOT_STARTED",
+                "last_error": None,
+                "streams": {},
+                "max_age_seconds": self._max_websocket_age_seconds(),
+            }
+        return self._feed.health(self._max_websocket_age_seconds())
+
+    def _monitor_websocket_feed(self) -> None:
+        """Force a reconnect when an open WebSocket stops delivering stream data."""
+        if self._feed is None:
+            return
+        health = self.websocket_health()
+        if health["status"] == "STALE":
+            stale_streams = sorted(
+                name for name, item in health["streams"].items()
+                if item["status"] == "STALE"
+            )
+            reason = "stale WebSocket streams: " + ", ".join(stale_streams)
+            if self._feed.request_reconnect(reason):
+                self.last_error = (
+                    "WebSocket feed stale; automatic reconnect requested for "
+                    + ", ".join(stale_streams)
+                )
+        elif (
+            health["status"] == "HEALTHY"
+            and self.last_error
+            and self.last_error.startswith("WebSocket feed stale;")
+        ):
+            self.last_error = None
+
     def _on_closed_candle(self, candle: FuturesCandle) -> None:
         if self.engine.get_bot_state() != "RUNNING":
             return
@@ -336,6 +374,10 @@ class FuturesPaperRuntime:
                     except (requests.RequestException, ValueError, KeyError) as exc:
                         self.last_error = str(exc)
                         print(f"Market-data/position update error: {exc}")
+                try:
+                    self._monitor_websocket_feed()
+                except Exception as exc:
+                    self.last_error = f"WebSocket health monitoring error: {exc}"
                 self._stop.wait(self.mark_poll_seconds)
         finally:
             self.stop_feed()

@@ -245,6 +245,45 @@ class RuntimeControlTests(unittest.TestCase):
         manage_positions.assert_called_once()
         self.assertEqual(self.engine.get_bot_state(), "RUNNING")
 
+    def test_stale_websocket_feed_requests_automatic_reconnect(self):
+        class FakeFeed:
+            def __init__(self):
+                self.reason = None
+
+            def health(self, max_age_seconds):
+                return {
+                    "status": "STALE",
+                    "streams": {"BTCUSDT:15m": {"status": "STALE"}},
+                }
+
+            def request_reconnect(self, reason):
+                self.reason = reason
+                return True
+
+        feed = FakeFeed()
+        self.runtime._feed = feed
+        self.runtime._monitor_websocket_feed()
+        self.assertEqual(feed.reason, "stale WebSocket streams: BTCUSDT:15m")
+        self.assertIn("automatic reconnect requested", self.runtime.last_error)
+
+    def test_healthy_websocket_clears_previous_stale_feed_error(self):
+        class FakeFeed:
+            def health(self, max_age_seconds):
+                return {"status": "HEALTHY", "streams": {}}
+
+            def request_reconnect(self, reason):
+                raise AssertionError("healthy feed must not reconnect")
+
+        self.runtime._feed = FakeFeed()
+        self.runtime.last_error = "WebSocket feed stale; automatic reconnect requested"
+        self.runtime._monitor_websocket_feed()
+        self.assertIsNone(self.runtime.last_error)
+
+    def test_websocket_health_reports_not_started_before_feed_start(self):
+        health = self.runtime.websocket_health()
+        self.assertEqual(health["status"], "NOT_STARTED")
+        self.assertEqual(health["connection_state"], "NOT_STARTED")
+
     def test_invalid_symbol_list_is_rejected(self):
         with self.assertRaises(ValueError):
             FuturesPaperRuntime(self.engine, [], interval="15m")
