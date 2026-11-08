@@ -1,5 +1,6 @@
 """Regression tests for WebSocket callback isolation."""
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from market_data.websocket import KlineWebSocket
@@ -15,7 +16,7 @@ class WebSocketCallbackTests(unittest.TestCase):
         )
 
     def test_callback_exception_does_not_escape_message_handler(self):
-        candle = object()
+        candle = SimpleNamespace(symbol="BTCUSDT", interval="15m")
         with patch.object(self.feed, "manager_packet", return_value=(candle, True)):
             with patch.object(self.feed, "on_candle", side_effect=RuntimeError("test failure")):
                 with patch("builtins.print") as report:
@@ -24,7 +25,7 @@ class WebSocketCallbackTests(unittest.TestCase):
         self.assertIn("test failure", report.call_args.args[0])
 
     def test_open_candle_does_not_call_strategy_callback(self):
-        candle = object()
+        candle = SimpleNamespace(symbol="BTCUSDT", interval="15m")
         callback = unittest.mock.Mock()
         self.feed.on_candle = callback
         with patch.object(self.feed, "manager_packet", return_value=(candle, False)):
