@@ -168,6 +168,11 @@ class FuturesPaperRuntime:
                 updated_at = self._mark_updated_at.get(symbol)
                 age = None if updated_at is None else max(0.0, now - updated_at)
                 reason = self._market_data_errors.get(symbol)
+                # A failed latest REST poll invalidates the health of every
+                # symbol covered by that poll immediately. Do not report a
+                # recently cached mark as HEALTHY while the newest poll failed.
+                if reason is None and self._last_mark_poll_error:
+                    reason = f"last mark-price poll failed: {self._last_mark_poll_error}"
                 stale = (
                     updated_at is None
                     or age is None
@@ -175,10 +180,7 @@ class FuturesPaperRuntime:
                     or reason is not None
                 )
                 if stale and reason is None:
-                    if self._last_mark_poll_error:
-                        reason = f"last mark-price poll failed: {self._last_mark_poll_error}"
-                    else:
-                        reason = "no successful mark-price update within freshness window"
+                    reason = "no successful mark-price update within freshness window"
                 health[symbol] = {
                     "status": "STALE" if stale else "HEALTHY",
                     "age_seconds": age,

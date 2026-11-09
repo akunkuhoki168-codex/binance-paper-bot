@@ -90,6 +90,38 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertEqual(self.engine.snapshot()["active_positions"], 0)
         self.assertEqual(self.runtime.market_data_health()["BTCUSDT"]["status"], "STALE")
 
+
+    def test_failed_mark_poll_immediately_stales_recent_marks_and_recovers(self):
+        import requests
+
+        self._publish_fresh_marks({"BTCUSDT": 101.25})
+        healthy = self.runtime.market_data_health()["BTCUSDT"]
+        self.assertEqual(healthy["status"], "HEALTHY")
+
+        with patch(
+            "runtime.requests.get",
+            side_effect=requests.ConnectionError("temporary REST outage"),
+        ):
+            with self.assertRaises(requests.ConnectionError):
+                self.runtime.refresh_marks()
+
+        stale = self.runtime.market_data_health()["BTCUSDT"]
+        self.assertEqual(stale["status"], "STALE")
+        self.assertLess(stale["age_seconds"], stale["max_age_seconds"])
+        self.assertIn("last mark-price poll failed", stale["last_error"])
+        self.assertEqual(self.runtime._marks["BTCUSDT"], 101.25)
+
+        response = SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: [{"symbol": "BTCUSDT", "markPrice": "102.0"}],
+        )
+        with patch("runtime.requests.get", return_value=response):
+            self.assertEqual(self.runtime.refresh_marks(), {"BTCUSDT": 102.0})
+
+        recovered = self.runtime.market_data_health()["BTCUSDT"]
+        self.assertEqual(recovered["status"], "HEALTHY")
+        self.assertIsNone(recovered["last_error"])
+
     def test_mark_health_recovers_after_fresh_public_response(self):
         self.runtime._mark_updated_at["BTCUSDT"] = time.monotonic() - 30
         self.runtime._market_data_errors["BTCUSDT"] = (
