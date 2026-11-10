@@ -10,19 +10,13 @@ import signal
 
 from dotenv import load_dotenv
 
-from paper_engine.engine import PaperEngine, PaperEngineSettings
+from paper_engine.config import paper_engine_settings_from_env
+from paper_engine.engine import PaperEngine
 from runtime import FuturesPaperRuntime
 
 load_dotenv()
 
 DB_PATH = os.getenv("DB_PATH", "data/paper_engine.sqlite3")
-STARTING = float(os.getenv("STARTING_BALANCE_USDT", "1000"))
-MAX_POS = int(os.getenv("MAX_POSITIONS", "5"))
-LEVERAGE = int(os.getenv("LEVERAGE", "10"))
-FEE = float(os.getenv("TAKER_FEE_RATE", "0.0005"))
-TP = float(os.getenv("TAKE_PROFIT_USDT", "10"))
-SL = float(os.getenv("STOP_LOSS_USDT", "5"))
-DAILY_LOSS_LIMIT = float(os.getenv("DAILY_LOSS_LIMIT_USDT", "50"))
 SYMBOLS = tuple(
     symbol.strip().upper()
     for symbol in os.getenv(
@@ -40,14 +34,10 @@ def main() -> None:
     print(f"Database: {DB_PATH}")
     print(f"Symbols: {', '.join(SYMBOLS)} | HA timeframe: {INTERVAL}")
 
-    settings = PaperEngineSettings(
-        initial_capital=STARTING,
-        max_positions=MAX_POS,
-        leverage=LEVERAGE,
-        taker_fee_rate=FEE,
-        take_profit_usdt=TP,
-        stop_loss_usdt=SL,
-        daily_loss_limit_usdt=DAILY_LOSS_LIMIT,
+    settings = paper_engine_settings_from_env()
+    print(
+        f"Paper settings: allocation={settings.allocation_mode}, "
+        f"positions={settings.max_positions}, leverage={settings.leverage}x"
     )
     engine = PaperEngine(DB_PATH, settings)
 

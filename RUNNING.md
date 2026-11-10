@@ -50,6 +50,9 @@ Open http://localhost:8501. Keep the `main.py` process running. The dashboard wr
 - `SEED_CANDLES`: historical completed candles per symbol (2–1500).
 - `MARK_POLL_SECONDS`: mark-price polling interval.
 - `STARTING_BALANCE_USDT`, `MAX_POSITIONS`, `LEVERAGE`, `TAKER_FEE_RATE`, `TAKE_PROFIT_USDT`, `STOP_LOSS_USDT`: paper-account configuration.
+- `ALLOCATION_MODE`: `fixed` (default) or `compounding`. This setting is loaded by `main.py`; invalid values stop startup rather than silently selecting a mode.
+
+For compounding allocation, set `ALLOCATION_MODE=compounding` in the process environment or your local `.env` file. For fixed allocation, set `ALLOCATION_MODE=fixed`.
 
 Set the same `DB_PATH` for the runtime and dashboard.
 
